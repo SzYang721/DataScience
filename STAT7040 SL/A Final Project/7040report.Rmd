@@ -1,0 +1,546 @@
+---
+title: 'Statistical learning: Moddling the common household price'
+author: "Songze Yang, u7192786"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(PerformanceAnalytics)
+library(mice)
+library(corrplot)
+library(faraway)
+library(MASS)
+library(leaps)
+library(reshape2)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(GGally)
+library(corrplot)
+library(ISLR)
+library(dplyr)
+library(VIM)
+library(lsr)
+library (glmnet)
+library (pls)
+library(tree)
+library(randomForest)
+library (gbm)
+library (BART)
+library(keras)
+library(tensorflow)
+library(xgboost)
+library(Matrix)
+library(caret)
+library(class)
+setwd("E:/ANU Sem 2/STAT3040STAT7040 - Statistical Learning/A Final Project")
+train <-
+  read.csv(file="train.csv",header=TRUE)
+test<-read.csv(file="test.csv",header=TRUE)
+```
+
+## Introduction
+
+The household information of the Australian city of Ken-Behrenia is provided in the training and test dataset, which have 30,000 and 10,000 observation. 
+
+There are 12 covariates in the dataset, including prior sale condition measurement score [cond], the sold year [year], the decade the house built [built], the location of the house in latitude [lat] and in longitude [lon], square meters of living space [sq.m.h] and of the lot size [sq.m.block] and of the pool size [sq.m.pool], whether renovated prior to sale [reno], number of bedrooms [bedrooms] and of bathrooms [bathrooms] and density measurement score [environ].
+
+Two responses are in the data, namely the the scaled sale price [price] and the satisfaction measurement [sent]. 
+
+## Exploratory data analysis
+
+```{r echo=FALSE, warning=FALSE}
+par(mfrow = c(1,2))
+train$sent<-as.factor(train$sent)
+p1<-ggplot(train, aes(x=lat, y=lon,color=price,shape = sent)) + 
+  geom_point()
+p2<-ggplot(train,aes(x=lat, y=price,color=sent)) + 
+  geom_point()
+grid.arrange(p1, p2, nrow = 2)
+```
+
+The map of the household distribution is shown above with color to denote different price of household and circle to denote high sentiment and triangle to denote medium and low sentiment. A number of 21915 the households are grouped from upper right corner. Additionally, a number of 2148 suburb is located in the left bottom corner about -4 in longitude and -3 in latitude. A reasonable explanation is that the larger area may be the main residual area of the Ken-Behrenia, which includes 91.07% of the data, while the smaller suburb covers 8.92%, both in case of ignoring the missing value. The test data has similar feature, where two distinct groups emerge. Also, the price and sent are randomly distributed in different locations from the graph.
+
+It is common belief that the latitude of the house is associated with the household price. Reasons behind this may be better sunlight, warmer climate and enjoyable indoor swimming pool. However, our data shows that there is no strong relationship between the the latitude and price. But higher price may be related to higher sentiment score.
+
+Excluding the ID for each house, the distributions of five continuous variables with sent are shown below, namely the price, condition score, and the square meter of living space, lot size and pool.
+
+```{r, warning=FALSE,echo=FALSE,fig.align='left',out.width="66%",results='hide'}
+p1<-ggplot(train, aes(x = price,fill = sent)) + 
+  geom_density()
+p2<-ggplot(train, aes(x = cond,fill = sent)) + 
+  geom_density()
+p3<-ggplot(train, aes(x = sq.m.h,fill = sent)) + 
+  geom_density()
+p4<-ggplot(train, aes(x = sq.m.block,fill = sent)) + 
+  geom_density()
+p5<-ggplot(train, aes(x = sq.m.pool,fill = sent)) + 
+  geom_density()
+grid.arrange(p1, p2,p3,p4,p5, 
+             widths = c(1, 1, 1), 
+             layout_matrix = rbind(c(1, 1, 2),
+                                   c(3,4,5)))
+```
+
+The price and sent are positively associated, confirmed our previous conclusion. As for condition, the houses with -1 to 0 score have more lower sent (0). Concerning the area of living space, lot size and pool size, the significant skewness discerned through the square meter variables can result in the subsequent model’s classification being biased. Also, the predictor variable price in our case is standardized. Thus, a standardization of our square meter variable applies here.
+
+```{r, warning=FALSE,echo=FALSE,results='hide',fig.align='left',out.width="66%"}
+p1<-ggplot(train, aes(x = environ,color = sent)) + 
+  geom_histogram(fill="white")+
+  theme(legend.position="top")
+p2<-ggplot(train, aes(x=year, y=price, color=sent)) + 
+  geom_point()
+p3<-ggplot(train, aes(x=built, y=price, color=sent)) + 
+  geom_point()
+p4<-ggplot(train, aes(x = reno,color = sent)) + 
+  geom_histogram(fill="white")
+p5<-ggplot(train, aes(x = bedrooms,color = sent)) + 
+  geom_histogram(fill="white")
+p6<-ggplot(train, aes(x = bathrooms,color = sent)) + 
+  geom_histogram(fill="white")
+grid.arrange(p1, p2,p3,p4,p5,p6,
+             widths = c(1, 1, 1), 
+             layout_matrix = rbind(c(2,3,4),
+                                   c(5,6,1)))
+```
+
+With regards to discrete data, namely reno, bedrooms, bathrooms and environ are right skewed. The distribution of sent is fairly constant though years and decade household built in. The skewness is fine in the linear model but may cause problem in the deep learning part. We apply scale function in that part.
+
+```{r, warning=FALSE,echo=FALSE, message=FALSE, results='hide',fig.align='left',out.width="66%"}
+mice_plot <- aggr(train, col=c('orange','yellow'),
+                              numbers=TRUE, sortVars=TRUE,
+                              labels=names(train), cex.axis=0.6,
+                                gap=3, ylab=c("Missing data","Pattern"))
+```
+
+There are approximately 19.8% of our data point contains missing values. Apart from id and our predictors, covariates have nearly 0.016% missing value below 2%. Thus, a multiple imputation apply here.
+
+```{r echo = FALSE,fig.align='left',out.width="66%",results='hide'}
+train$sent<-ifelse(train$sent==1,0,1)
+res <- cor(train[,-1],use = "pairwise.complete.obs")
+corrplot::corrplot(res, type="upper", order = "hclust", 
+         tl.col = "black", tl.srt = 45)
+```
+
+The correlation matrix is presented above. Only the lat and lon are considered as highly correlated with correlation higher than 80%. High correlation causes a compromised imputation result. Thus, we will consider a predictive mean matching approach to reduce this correlation.
+
+```{r echo = FALSE,fig.align='left',out.width="66%"}
+train.imp <-
+  read.csv(file="train.imp.csv",header=TRUE,stringsAsFactors=T)
+train.imp$reno<-as.factor(train.imp$reno)
+test.imp <-
+  read.csv(file="test.imp.csv",header=TRUE,stringsAsFactors=T)
+test.imp$reno<-as.factor(test.imp$reno)
+```
+
+## Modelling the household price
+
+### linear regression 
+
+The most common way to tackle a regression class question is linear regression modelling. We will rely on the regsubsets function to select each best model processing a certain number of covariates. The regsubsets function will select the model with lowest R squared in each step. Then we will use validation set and 10-fold cross validation to test the prediction power of our model. The plotted results is plotted below.
+
+```{r echo = FALSE, message=FALSE,out.width="66%"}
+## Validation set method
+set.seed (1)
+train.1 <- sample (c(TRUE , FALSE), nrow (train.imp),
+                   replace = TRUE)
+test.1 <- (!train.1)
+
+regfit.best <- regsubsets (price ~.,
+                           data = train.imp[train.1,c(-1,-3)], nvmax = ncol(train.imp)-2)
+
+test.mat <- model.matrix (price ~., data = train.imp[test.1, c(-1,-3)])
+
+predict.regsubsets <- function (object , newdata , id, ...) {
+  form <- as.formula (object$call[[2]])
+  mat <- model.matrix (form , newdata)
+  coefi <- coef (object , id = id)
+  xvars <- names (coefi)
+  mat[, xvars] %*% coefi
+}
+
+val.errors <- rep (NA, 12)
+for (i in 1:12) {
+  coefi <- coef (regfit.best , id = i)
+  pred <- test.mat[, names (coefi)] %*% coefi
+  val.errors[i] <- mean ((train.imp$price[test.1] - pred)^2)
+}
+i<-which.min (val.errors)
+## k-fold validation
+k <- 10
+n <- nrow (train.imp)
+set.seed (1)
+folds <- sample (rep (1:k, length = n))
+cv.errors <- matrix(NA, k, (ncol(train.imp)-3),
+                       dimnames = list (NULL , paste (1:(ncol(train.imp)-3))))
+
+for (j in 1:k) {
+  best.fit <- regsubsets (price ~ .,
+                        data = train.imp[folds != j, c(-1,-3)],
+                        nvmax = (ncol(train.imp)-2))
+  for(i in 1:(ncol(train.imp)-3)) {
+    pred <- predict (best.fit , train.imp[folds == j, c(-1,-3)], id = i)
+    cv.errors[j, i] <-mean ((train.imp$price[folds == j] - pred)^2)
+    }
+  }
+mean.cv.errors <- apply (cv.errors , 2, mean)
+par(mfrow = c(1,2))
+plot(val.errors, type = "b")
+plot (mean.cv.errors , type = "b")
+```
+
+Both methods suggest the number 8 model. So our model can be written as follows. The validation MSE for this model is 0.4309205 and 10-fold validation MSE is 0.4341238.
+
+$$
+price = 1.36534177 -0.14954392*year -0.02272077*built + 0.44156831*lat-0.57386103*lon + 
+$$
+$$
+0.62459880*sq.m.h + 0.05210058*sq.m.block -0.09477073*bedrooms + 0.13139679*bathrooms 
+$$
+
+### Ridge and Lasso Regression
+
+The shrinkage method is a family of important method in improving performance from simple linear regression. We will select dimension reduction methods from 2 class of model, namely ridge regression, lasso regression. In both ridge and lasso regression, the turning parameter is selected by the k-fold validation. Thus, the 10-fold is applied here.
+
+```{r echo = FALSE,out.width="66%"}
+## setup
+x <- model.matrix (price ~., train.imp)[, -c(1:3)]
+y<-train.imp$price
+x.test <- model.matrix (id~.,test.imp)[,-1]
+
+## ridge validation 10-fold CV validation
+set.seed (1)
+cv.out <- cv.glmnet (x, y, alpha = 0, type.measure = "mse")## default is 10 
+bestlam <- cv.out$lambda.min
+ridge.mod <- glmnet (x, y, alpha = 0)
+ridge.pred <- predict (ridge.mod , s = bestlam ,
+                       newx = x.test)
+## Lasso
+
+lasso.mod <- glmnet (x, y, alpha = 1)
+set.seed (1)
+cv.out <- cv.glmnet (x, y, alpha = 1,type.measure="mse")
+bestlam <- cv.out$lambda.min
+lasso.pred <- predict (lasso.mod , s = bestlam ,
+                       newx = x.test)
+```
+The 10-fold validation result is 0.443308 for ridge regression and 0.4342615 for lasso regression. The lasso regression improves slightly than the ridge regression.
+
+### Decision Tree
+
+In the previous analysis, the interaction between covariates is not measured. The linear regression model assumes that the predictors in the model are independently distributed, a assumption hardly achieved in the real setting. However, the tree model handles this problem smoothly. Next, we will apply a number of tree models.
+
+A normal regression tree stratifying or segmenting the predictor space into a number of simple regions. A set of rules are used in splitting the predictor space. To determine variables linked to response, a regression is fitted and prune to prevent overfitting. Applying a 10-fold cross validation, the MSE is not reduced after the tree has 8 nodes. We choose the tuning parameters alpha based on the CV result. The pruned part mainly come from the sq.m.h variable split in each subtree after a initial splitting of sq.m.h. The 10-fold cross-validation score is 19051.64. The performance of decision-tree is very low compared to linear and shrinkage method.
+
+```{r echo = FALSE,out.width="90%"}
+par(mfrow = c(1,3))
+tree.reg<-tree(price~.,data = train.imp[,c(-1,-3)])
+p1<-plot(tree.reg)
+text(tree.reg,pretty = 33)
+cv.regtree<-cv.tree(tree.reg,K=10)
+p2<-plot(cv.regtree$size,cv.regtree$dev,type = "b")
+prune.regtree<-prune.tree(tree.reg,best=8)
+p3<-plot(prune.regtree)
+text(prune.regtree,pretty = 0)
+```
+
+### Bagging
+
+To improve this, bagging algorithm is applied here. The general-purpose bagging algorithm is used to reduce the variance. It involves generating B number of bootstrap sample, fitting trees on each bootstrap example and averaging the results of many trees. As the bootstrap have cooperated into the bagging algorithm, we do not need to perform the cross validation. However, to avoid overfitting, We can choose the number of tree to grow from the graph below. The 100 trees model follows no significant improvement in the accuracy. The training MSE at this point is 0.2850119.
+
+```{r echo = FALSE,out.width="66%"}
+## bagging
+bag.result<-read.csv(file="bagtree result.csv",header=TRUE)
+plot(bag.result,ylab = "Trainign MSE", xlab = "Iteration")
+```
+
+### Random Forest
+
+Next, random forest combines the bagging method to further improve the prediction power. It manages to reduce the MSE by selecting a subset of m covariates when fitting each node. Thus, the correlation between trees is tweaked. The m here is choosed by the square root of p, where p is the number of covariates in the data. We then need to choose the number of trees to prevent overfitting. The 50 tree model has related low MSE as in the graph. The training MSE at this point is 0.2764581.
+
+```{r echo = FALSE,out.width="66%"}
+## random forest 
+rf.result<-read.csv(file="rf result.csv",header=TRUE)
+plot(rf.result,ylab = "Trainign MSE", xlab = "Iteration")
+```
+
+### Boosting Tree
+
+Lastly, the sequential boosting algorithm can further push our prediction power. Boosting method update the tree based on the previous tree. It repeatedly targets on the residual from the previous tree and add new tree to improve the fitting. It prevents overfitting naturally by the shrinkage parameter, which is by default 0.1. We will fit a 100 trees model with interaction.depth = 4. As overfitting will be mild in boosting, we will iterate through to get a better prediction accuracy.
+
+```{r,echo=FALSE,out.width="66%",warning=FALSE,results='hide'}
+boost.result<-read.csv(file="boost result price.csv",header=TRUE)
+plot(boost.result,ylab = "Trainign MSE", xlab = "Iteration")
+```
+
+The MSE is stable after 50 iteration. The MSE at this point is 0.3382037. The number of tree is the same as that in random forest.
+
+### Xgboost
+
+The boost tree method nowadays has been pushed to its edge. The gradient boosting framework has been cooperated into the boost decision tree model to reduce error and to work faster. Many open sourced software libaray improve our performance in scoring, such as XGboost, lightGBM and Catboost. The three are very similar but with some difference in tree-growing strategy. We will use Xgboost to do a horse race with the algorithm above.
+
+```{r eval=FALSE,echo = FALSE}
+traindata1 <- data.matrix(train[,c(4:ncol(train))]) 
+traindata2 <- Matrix(traindata1,sparse=T)
+traindata3 <- data.matrix(train[,2])
+traindata4 <- list(data=traindata2,label=traindata3)
+dtrain <- xgb.DMatrix(data = traindata4$data, label = traindata4$label)
+
+testdata1 <- data.matrix(test[,c(2:ncol(test))])
+dtest <- xgb.DMatrix(data = testdata1)
+set.seed(1200)
+xgb_param<-list(objective="reg:squarederror")
+xgb_cv<-xgb.cv(params=xgb_param,data=dtrain,nrounds=3000,nfold=10,showsd=T,stratified=T,print_every_n=40,
+               early_stopping_rounds = 50,maximize=F)
+xgb_model<-xgb.train(data=dtrain, params=xgb_param,nrounds =131)
+```
+
+We will only use the default parameter to train the model and use a 10-fold cross validation to select the best iteration. There are many parameter we can tune in train a Xgboost model, mainly booster parameters, learning task parameters and general parameters. Due to the certain time limit in the kaggle competition, we will not use algorithm, such as grid search, to tune our parameter to get a better prediction. However, ways do exist to improve our model. For example, the decrease of learning rate eta from the default value 0.3 to 0.03 can potentially give us a better model. Or the tuning of colsample_bytree parameter can generate more randomness at each node thus to give us a random forest like boosting tree. Some package can help us tune the parameter here, for instance, the MLR package.
+
+The model 10 fold training MSE is 0.2474197, which is calculated by the the RMSE provided by the output. The test MSE on kaggle is 0.25146, which is currently our best model for price. The algorithm is much efficient than the boost tree before.
+
+## Modelling the satisfaction score (sent)
+
+### logistic regression
+
+The logistic regression is by far the most common technique to tackle the binary classification problem. It assumes a log of odd link function to predict the probability of each class. Prior to fit a logistic model to data, a forward selection based on training MSE is used to shrink our predictor space. Also, while we apply 10-fold cross validation to compute MSE for our model, the confidence interval is computed and graphed as well. The result is shown below.
+
+```{r echo = FALSE,out.width="66%"}
+train.imp$sent<-as.factor(train.imp$sent)
+train.imp$reno<-as.factor(train.imp$reno)
+full.mod<-as.formula(sent~.)
+null.mod<-as.formula(sent~1)
+
+glm.full<-glm(full.mod,data = train.imp,
+              family = binomial)
+glm.null <- glm(null.mod,
+                data = train.imp,family = binomial
+)
+cv.err<-function(method,formula,data,K,knnfold){
+  n<-nrow(data)
+  set.seed(888)
+  fold<-sample(rep(1:K,each = n/K))
+  mse.out <- rep(0,K)
+  
+  ##
+  for(k in 1:K){
+    data.train <- data[fold!=k,]
+    data.test <- data[fold==k,]
+    if(method=="glm"){
+      mod.train <- glm(formula, data = data.train,family = "binomial")
+      pred.test <- predict(mod.train, newdata = data.test,type = "response")
+      glm.pred<-rep(0,nrow(data.test))
+      glm.pred[pred.test>0.5] = 1
+      mse.out[k] <- mean(data.test$sent != glm.pred)
+    }
+    else if(method == "lda"){
+      mod.train <- lda(formula, data = data.train)
+      lda.class <- predict(mod.train, newdata = data.test)$class
+      mse.out[k] <- mean(data.test$sent != lda.class)
+    }
+    else if(method == "qda"){
+      mod.train <- qda(formula, data = data.train)
+      qda.class <- predict(mod.train, newdata = data.test)$class
+      mse.out[k] <- mean(data.test$sent != qda.class)
+    }
+    else if(method == "knn"){
+      X.train <- model.matrix(formula, data =data.train)
+      X.test <- model.matrix(formula, data = data.test)
+      mod.out <- knn(X.train, X.test, data.train$sent , k = knnfold)
+      mse.out[k] <- mean(data.test$sent != mod.out)
+    }
+  }
+  mse.est <- mean(mse.out)
+  
+  sd.mse.est <- sd(mse.out)/sqrt(K)
+  
+  return(c(mse.est,sd.mse.est))
+}
+
+method.fwd<-function(method,data,kfold){
+  variable<-names(data[4:ncol(data)])
+  max.steps<-length(variable)
+  mod<-"sent ~ "
+  a<-1
+  cv.out<-matrix(0,nrow = max.steps,ncol = 2)
+  while(a<=max.steps){
+    cv.list<-matrix(0,nrow = length(variable),ncol = 2)
+    for(i in 1:length(variable)){
+      if(a == 1){formula<-as.formula(paste(mod,variable[i]))}
+      else if(a>1){formula<-as.formula(paste(mod,"+",variable[i]))}
+      if(method=="glm")
+        re<-cv.err("glm",formula,data,10)
+      else if(method=="lda")
+        re<-cv.err("lda",formula,data,10)
+      else if(method == "qda")
+        re<-cv.err("qda",formula,data,10)
+      else if(method == "knn")
+        re<-cv.err("knn",formula,data,10,knnfold = kfold)
+      cv.list[i,1]<-re[1]
+      cv.list[i,2]<-re[2]
+    } 
+    selected.var<-variable[which.min(cv.list[,1])]
+    cv.out[a,1]<-min(cv.list[,1])
+    cv.out[a,2]<-cv.list[which.min(cv.list[,1]),2]
+    variable<-variable[-which.min(cv.list[,1])]
+    mod<-paste(mod, "+",selected.var)
+    a <-a +1
+  }
+  return(list(cv.out,mod))
+}
+cv.out<-method.fwd("glm",train.imp,10)
+plot(cv.out[[1]][,1],type = "p",lwd = 2,cex = 1.2,
+     ylab = "Cross Validation (Steps)",
+     xlab = "Steps",
+     main = "Forward Selection based on CV",
+     ylim = c(0.2,0.23))
+points(which.min(cv.out[[1]][,1]),min(cv.out[[1]][,1]),
+       pch = 18,col = "red",cex = 1.5)
+points(1:(ncol(train.imp)-3),cv.out[[1]][,1]+cv.out[[1]][,2],
+       pch = 25,col = "red",cex = 1)
+points(1:(ncol(train.imp)-3),cv.out[[1]][,1]-cv.out[[1]][,2],
+       pch = 24,col = "red",cex = 1)
+mod.last<-cv.out[[2]]
+glm.final<-glm(sent~sq.m.h + built + lon + bedrooms,data = train.imp,
+              family = binomial)
+```
+
+The result shows that after 4 initial variables are added into the model, the training MSE do not reduce significantly. Thus, our final model is fitted as below. The training MSE for this model is 0.2038667.
+
+$$
+log(\frac {p(sent=1)}{1-p(sent=1)} )= -0.9077081 - 1.5070861*sq.m.h + 0.2241024*built + 
+$$
+$$
+0.2924656*lon + 0.3444135*bedrooms
+$$
+
+
+### linear discriminant analysis
+
+LDA assumes that all independent variables are drawn from a multivariate Gaussian distribution. Our data have left or right skewed problems seen in the exploratory data analysis. Subsequent to a standardization of our data, our data is ready to fit a LDA model. As before, we will apply the same procedure using the forward selection algorithm to perform variable shrinkage.
+
+```{r echo = FALSE}
+train.imp <-
+  read.csv(file="train.imp.csv",header=TRUE,stringsAsFactors=T)
+test.imp <-
+  read.csv(file="test.imp.csv",header=TRUE,stringsAsFactors=T)
+train.scale<-as.data.frame(scale(train.imp))
+cv.out<-method.fwd("lda",train.scale,10)
+plot(cv.out[[1]][,1],type = "p",lwd = 2,cex = 1.2,
+     ylab = "Cross Validation (Steps)",
+     xlab = "Steps",
+     main = "Forward Selection based on CV",
+     ylim = c(0.2,0.23))
+points(which.min(cv.out[[1]][,1]),min(cv.out[[1]][,1]),
+       pch = 18,col = "red",cex = 1.5)
+points(1:(ncol(train.imp)-3),cv.out[[1]][,1]+cv.out[[1]][,2],
+       pch = 25,col = "red",cex = 1)
+points(1:(ncol(train.imp)-3),cv.out[[1]][,1]-cv.out[[1]][,2],
+       pch = 24,col = "red",cex = 1)
+mod.final<-as.formula(sent ~  + sq.m.h + built + bedrooms + sq.m.pool)
+best.mod<-lda(mod.final,data = train.imp)
+pred<- predict(best.mod, newdata = train.imp)
+lda.class<-pred$class
+group0<-train.imp[lda.class==1,]$sq.m.h
+group1<-train.imp[lda.class==0,]$sq.m.h
+
+hgA <- hist(group0, plot = FALSE) # Save first histogram data
+hgB <- hist(group1, plot = FALSE) # Save 2nd histogram data
+
+plot(hgA,col=rgb(0,0,1,1/4)) # Plot 1st histogram using a transparent color
+plot(hgB, col=rgb(1,0,0,1/4),add = TRUE) # Add 2nd histogram using different color
+abline(v = mean(best.mod$means[,1]),col = "orange")
+```
+
+The result is similar to the logistic regression. After the initial four variables are added into the model, the MSE of data stay in a flat range. Thus, the model with four variables, namely sq.m.h, built, bedrooms and lon, is fitted. The training MSE for this model is 0.2038667.
+
+
+### Quadratic discriminant analysis
+
+Alike LDA, QDA assumes that predictor variables are normally distributed and have minimal multicollinearity. Furthermore, the QDA assumes that each variable possess their own variance-covariance matrix. In our case, the variables are either left or right skewed but the variance for each predictor are unique. Thus, QDA is appropriate. 
+
+```{r echo = FALSE,out.width="66%"}
+cv.out<-method.fwd("qda",train.imp,10)
+cv.out[[2]]
+plot(cv.out[[1]][,1],type = "p",lwd = 2,cex = 1.2,
+     ylab = "Cross Validation (Steps)",
+     xlab = "Steps",
+     main = "Forward Selection based on CV",
+     ylim = c(0.2,0.236))
+points(which.min(cv.out[[1]][,1]),min(cv.out[[1]][,1]),
+       pch = 18,col = "red",cex = 1.5)
+points(1:(ncol(train.imp)-3),cv.out[[1]][,1]+cv.out[[1]][,2],
+       pch = 25,col = "red",cex = 1)
+points(1:(ncol(train.imp)-3),cv.out[[1]][,1]-cv.out[[1]][,2],
+       pch = 24,col = "red",cex = 1)
+mod.last<-cv.out[[2]]
+```
+
+The result is close to the linear discriminant analysis. After the first four variables are added into the model, the MSE of data climbs up, suggesting a overfitting. Thus, the model with four variables, namely sq.m.h, built, bedrooms and sq.m.pool, is fitted. The training MSE for this model is 0.2066333.
+
+### Boost Tree Model
+
+From the previous analysis, the boost tree method combines the advantage of bagging and random forest. To make the best prediction, the boost tree is used in the classification of sent. The prior distribution is bernoulli for two class classification and the number of tree to try is set at 500. The interaction depth is fitted at 4.
+
+```{r echo=FALSE,out.width="66%"}
+boost.result.sent<-read.csv(file="boost result sent.csv",header=TRUE)
+plot(boost.result.sent, ylab = "Training error",xlab = "iterations",col = "orange")
+```
+
+After 500 iteration, the training error reduces very slowly. Thus, we will use 500 as number of iteration to prevent overfitting. The MSE at this iteration is 0.6879958.
+
+### Xgboost model
+
+The open-source software XGboost can also be used. As before, the MSE is the lowest amount all the model.
+
+```{r echo=FALSE,message=FALSE, eval=FALSE,out.width="66%"}
+traindata1 <- data.matrix(train.imp[,c(4:ncol(train.imp))])
+traindata2 <- Matrix(traindata1,sparse=T) 
+traindata3 <- data.matrix(train.imp[,3]) 
+traindata4 <- list(data=traindata2,label=traindata3) 
+dtrain <- xgb.DMatrix(data = traindata4$data, label = traindata4$label) 
+
+testdata1 <- data.matrix(test.imp[,c(2:ncol(test.imp))]) 
+dtest <- xgb.DMatrix(data = testdata1)
+
+set.seed(1200)
+xgb_param<-list(objective="binary:logistic")
+xgb_cv<-xgb.cv(params=xgb_param,data=dtrain,nrounds=3000,nfold=10,showsd=T,stratified=T,print_every_n=40,
+               early_stopping_rounds = 10,maximize=F)
+xgb_model<-xgb.train(data=dtrain, params=xgb_param,nrounds =195)
+```
+
+## Conclusion
+
+Regarding the price, the year, built, lat and lon are 4 most important factor, as it leads to the most explaination in the forward selection process for linear model. The lasso regression suggests that the cond, year, built and lat are most import variable. The lasso do not shrink any of the variables to 0, suggesting that the other variables may take effect in predicting. The tree suggests that the sq.m.h, year, lon and lat is important. There is some discrepancy between but all points to the year the household sold(timing of the house sold), the location (lat and lon variable) and area of the house(sq.m.h). This variables match our real life experience.
+
+In terms of the predictivity, the linear family, that is linear regression, ridge regression and lasso regression, produces similar prediction accuracy, all centered around 0.43. For the tree family, the improvement makes from bagging to random forest. The boosting model with 100 iteration underperforms the random forest and bagging models. Like above analysis, the prediction power of boosting will eventually overtake other tree models, as suggested by the improvement led by XGboost model. All the MSE mentioned here is measured by the 10-fold cross validation on the training data. 
+
+```{r,echo = FALSE,out.width="66%"}
+l<-cbind(0.4341238,0.443308, 0.4342615, 19051.64, 0.2850119, 0.2764581,0.3419989,0.2474197)
+colnames(l)<-c("Linear regression","Ridge regression","Lasso Regression",
+               "Decision Tree","Bagging","Random Forest","Boost","XGboost")
+barchart(l[1,-4],colnames(l[1,-4]),col = "green")
+```
+
+For the prediction of sent, similarly the logistic regression and LDA return approximate correct rate. The QDA assumes that variables have non-identical variance, assumption that accords to our data. But the correct rate for this model is lower than both logistic regression and LDA. This may be caused by the nature that our data is linearly separable.
+
+```{r ,echo = FALSE,out.width="66%"}
+q<-cbind(1-0.2038667,1-0.2038667,1-0.2066333)
+colnames(q)<-c("logistic regression","LDA","QDA")
+barchart(q[1,],colnames(q[1,]),col = "lightblue")
+```
+
+Likewise, the Xgboost provides better fit than normal boost model. The better parameter and computational algorithm helps the model to achieve better accuracy in shorter time.
+
+```{r, echo=FALSE,out.width="66%"}
+q<-cbind(0.6879958,1-0.283943)
+colnames(q)<-c("Boost tree","XGboost")
+barchart(q[1,],colnames(q[1,]),col = "orange")
+```
+
+Lastly, the sent variable is associated with sq.m.h the most, since the logistic regression, LDA and QDA all select it in the first place. Other most important factors are built, bedrooms and sq.m.pool. For the three model here, we assumes that the covariates are independent, meaning that for certain house size, bigger pool and more bedrooms may be more attractive on the market. This is my scientific answer to the problem.

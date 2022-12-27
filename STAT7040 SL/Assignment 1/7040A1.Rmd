@@ -1,0 +1,379 @@
+---
+title: "Assignment 1 7040"
+author: "Songze Yang, u7192786"
+date: "3/14/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, echo = TRUE, results = "hide", message=FALSE, warning=FALSE,include=FALSE}
+library(olsrr)
+library(MASS)
+library(Metrics)
+library(leaps)
+library(faraway)
+```
+
+The data containing the health insurance claim over 2 years time in the US are included in the file called 'Data'. We split the data into training data, which include the first 300 claims, and test data, the other 308 cases. The data will be used to examine the relationship between insurance claims and all the covariates.
+```{r setup, include=FALSE}
+setwd("E:/ANU Sem 2/STAT3040STAT7040 - Statistical Learning/Assignment 1")
+Data <-
+  read.table("Data.txt",header=TRUE,stringsAsFactors=TRUE
+  )
+train.data = Data[1:300,]
+test.data = Data[301:length(Data$Y),]
+levels(train.data$x6) <- c("low", "medium", "high")
+```
+
+## (a)
+
+We can investigate outliers by plotting box plot:
+
+```{r}
+par(mfrow = c(2,ncol(train.data)/2))
+invisible(lapply(1:ncol(train.data), function(i)boxplot(train.data[,i])))
+```
+
+```{r, echo=FALSE}
+par(mfrow = c(1,5));plot(train.data$x1, col = "green",ylab = "Age");plot(train.data$x2, col ="red", ylab = "Procedures");plot(train.data$x4, col = "red",ylab = "Emergency Room Visit");plot(train.data$Y,col = "red",ylab = "Claims");plot(log(train.data$Y),col = "green",ylab = "Natural log of claims")
+```
+The result shows that the Y(Claims), x1(Age), x2(Procedures) and x4(Emergency Room Visits) have potential outliers in the data. The x5(Complications) have mean of approximately 0.04667, suggesting that complications are raw event. As the x5(Complications) only takes 0 and 1 value, we will not consider 1s as outliers, the reason that applied to x3(Prescribed Drugs). The other variables seem fine from the box plots. 
+
+A small number of people make insurance claims at age 40, corresponding to the outliers from our box plot. However, the age data should not be excluded as we do not want left censored data. Also, many points on our scatter plot spread out in the range of 40 to 50, therefore, insurance claims made at age 40 to 50 should not be rare event.
+
+The x2(Procedures) and x4(Emergency Room Visits) look similar on the scatter plot. Both has a few high values show on the top of the graph, showing that people need more prescribed drugs or conduct more emergency room visits in some cases.
+
+The Y(Claims) variable seems spread out the most. The main points center around the 0 to 10,000, while many points reach out from 10,000 to more than 40,000. However, after a log transformation, the problem of unusual points become mild.
+
+This suggests a transformation of Y is appropriate. We further look at the transformation of features.
+
+```{r}
+train.data$logY<-log(train.data$Y);test.data$logY<-log(test.data$Y);pairs(train.data[,c(9,2:8)], col = "red")
+```
+The scatter plot matrix shows no obvious curvature. Therefore, the transformation of covariates is dismissed.
+
+
+## (b)
+
+Fitting the linear model between Y and x3, we reach the summary table as shown below.
+
+```{r}
+fit<-lm(logY~x3, data = train.data);sumary(fit)
+```
+
+Here, we conduct the hypothesis testing on the $\beta_1$.
+
+$$
+H_0: \beta_1 = 0 , H_A: \beta_1 \neq 0
+$$
+
+As the t-value in our linear fit is 2.9187, this suggests the linear relationship exists as the coefficient for x3 is significant at 95% confident level. We reject the null hypothesis and conclude $H_A$.
+
+We continue to explore the ploynominal model.
+
+```{r}
+fit2 <- lm(logY~poly(x3 , 2), data = train.data);fit3 <- lm(logY~poly(x3 , 3), data = train.data)
+sumary(fit2); sumary(fit3)
+```
+
+F-tests are applied here, for the quadratic model:
+
+$$
+H_0: \beta_1 = \beta_2 = 0 , H_A: At \ least \ one \ of \ \beta_1 \ or \ \beta_2\neq 0
+$$
+
+For the cubic model:
+
+$$
+H_0: \beta_1 = \beta_2 = \beta_3 = 0 , H_A: At \ least \ one \ of \ \beta_1 \ or \ \beta_2 \ or \ \beta_3\neq 0
+$$
+
+For the F-tests of 4.391 and 3.246, those show that both the second and third polynomial model are significant at 5% level, advising that the higher terms improve the model residual sum of square from using the mean of Y.
+
+```{r,echo=FALSE}
+anova(fit,fit2);anova(fit,fit3)
+```
+
+However, partial F-test should be conducted to see whether the polynomial improves significantly from the linear model. The test is shown below:
+
+For quadratic model:
+
+$$
+H_0: \beta_2 = 0 , H_A: \beta_2 \neq 0
+$$
+For cubic model:
+
+$$
+H_0: \beta_2 = \beta_3 = 0 , H_A: At \ least \ one \ of \ \ \beta_2 \ or \ \beta_3\neq 0
+$$
+
+The higher terms improve the model very slightly, because the partial F-test for the second and third model is both not significant, namely with F-value 0.2832 and 0.6207 and p_value 0.595 and 0.5383. Hence, we conclude the linear model. The model should have flexibility as the linear model.
+
+## (c)
+
+We can calculate the training MSE of our model as follow:
+
+```{r, echo=FALSE}
+mean(fit$residuals^2);mean(fit2$residuals^2);mean(fit3$residuals^2)
+```
+
+The training MSE decreases, indicating the use of the higher order terms. The result is different from 1b, however, it is accorded to the fact that the $R^2$ will always increase as more parameter added. We can calculate the test MSE using the method shown below:
+
+```{r include=FALSE}
+test.data.x <- data.frame(test.data[,2:8])
+names(test.data.x) <- c("x1","x2","x3","x4","x5","x6","x7")
+```
+```{r,echo=FALSE}
+mse(test.data$logY,predict(fit,newdata = test.data.x));mse(test.data$logY,predict(fit2,newdata = test.data.x));mse(test.data$logY,predict(fit3,newdata = test.data.x))
+```
+
+The test MSE suggests the opposite. The MSE of the models increases with the term added into the model. This suggests that the linear model is the best among the three, result that is accorded to the 1b.
+
+## (d)
+
+First, we fit the full model as follow:
+
+```{r, echo=FALSE}
+full<- lm(logY~ .,data=subset(train.data, select=c(-Y)))
+sumary(full)
+```
+
+The full model reveals potentially x1, x3 and x7 may be insignificant to the model individually. We can use a backward selection based on partial F test to double comfirm.
+
+```{r, echo=FALSE}
+fin<-ols_step_backward_p(lm(train.data$logY~.,data = subset(train.data, select = c(-Y))),prem = 0.05)
+fin
+```
+
+
+The result suggests that we can drop x1, x3 and x7 from the full model as we analysed. The hypothesis tested by partial F-test is shown as:
+
+$$
+H_0: \beta_p = 0 , H_A: \beta_p \neq 0 \ , \ in\ the \ presence \ of \ all \ other \ variable
+$$
+
+The final model we choose is:
+
+```{r, echo=FALSE}
+fin$model
+```
+
+Our final model fits as follow:
+
+$$
+log(Y) = 5.97921 + 0.19282*x_2+ 0.07073*x_4 + 0.71571*x_5 -1.31537*x_6medium -0.63572* x_6high
+$$
+
+## (e)
+```{r, echo=FALSE}
+reduced1<-update(full, ~. -x3)
+reduced2<-update(full, ~. -x3-x7)
+reduced3<-update(full, ~. -x3-x7-x1)
+```
+
+The MSE for train and test data are as followed:
+
+```{r, include=FALSE}
+elist<-c(1:4)
+elist[1]<-mean(full$residuals^2)
+elist[2]<-mean(reduced1$residuals^2)
+elist[3]<-mean(reduced2$residuals^2)
+elist[4]<-mean(reduced3$residuals^2)
+elite<-c(1:4)
+elite[1]<-mse(test.data$logY,predict(full,test.data.x))
+elite[2]<-mse(test.data$logY,predict(reduced1,test.data.x))
+elite[3]<-mse(test.data$logY,predict(reduced2,test.data.x))
+elite[4]<-mse(test.data$logY,predict(reduced3,test.data.x))
+```
+```{r, echo=FALSE}
+par(mfrow = c(1,2))
+plot(1:4,elist, lty = 1, type = "l",lwd = 2, col = "blue",
+     xlab = "Number of steps in the backward selection",
+     ylab = "MSE of the model",
+     main = "Squared error loss for training data")
+plot(1:4,elite,lty = 1, type = "l",lwd = "2",col = "red",
+     xlab = "Number of steps in the backward selection",
+     ylab = "MSE of the model",
+     main = "Squared error loss for testing data")
+```
+
+The backward selection process gives us slightly higher training MSE. The testing MSE during the backward selection process appears to incline at first and decline slightly in the final model. In conclusion, the training and testing MSE both suggests that we should use the full model.
+
+## (f)
+
+The interaction model of x6(Comorbidities) and other variables can be fitted as shown:
+
+```{r, echo=FALSE}
+intfit<-lm(logY~. +x1:x6 + x2:x6 + x3:x6 + x4:x6 + x5:x6 + x7:x6, data=subset(train.data, select=c(-Y)))
+intfin<-ols_step_backward_p(intfit,prem = 0.05)
+intfin$model
+```
+
+A backward selection approach agrees with our approach as it reaches the same model as before. To investigate whether interactions are significant, we can do a partial F test on all the interactions.
+
+$$
+H_0 \ : all\ the\ interactions\ are \ 0 , H_A: at\ least\ one\ interaction\ is\ not\ 0
+$$
+
+The test produce a 0.5189 F-value with p-value of 0.9019, which is not significant. We fail to reject the null hypothesis and conclude $H_0$. This leads us to conclude that all the interaction is 0, therefore, there is not significant interaction between x6(Comorbidities) and all other features.
+
+## (g)
+
+We can fit all the model in our backward selection again and calculate the MSE.
+
+```{r, include=FALSE}
+inre1<-update(intfit, ~. -x5:x6)
+inre2<-update(intfit, ~. -x5:x6-x3)
+inre3<-update(intfit, ~. -x5:x6-x3-x3:x6)
+inre4<-update(intfit, ~. -x5:x6-x3-x3:x6-x1:x6)
+inre5<-update(intfit, ~. -x5:x6-x3-x3:x6-x1:x6-x7)
+inre6<-update(intfit, ~. -x5:x6-x3-x3:x6-x1:x6-x7-x6:x7)
+inre7<-update(intfit, ~. -x5:x6-x3-x3:x6-x1:x6-x7-x6:x7-x4:x6)
+inre8<-update(intfit, ~. -x5:x6-x3-x3:x6-x1:x6-x7-x6:x7-x4:x6-x2:x6)
+inre9<-update(intfit, ~. -x5:x6-x3-x3:x6-x1:x6-x7-x6:x7-x4:x6-x2:x6-x1)
+
+MSElist<-c(1:9)
+MSElist[1]<-mean(inre1$coefficients^2)
+MSElist[2]<-mean(inre2$coefficients^2)
+MSElist[3]<-mean(inre3$coefficients^2)
+MSElist[4]<-mean(inre4$coefficients^2)
+MSElist[5]<-mean(inre5$coefficients^2)
+MSElist[6]<-mean(inre6$coefficients^2)
+MSElist[7]<-mean(inre7$coefficients^2)
+MSElist[8]<-mean(inre8$coefficients^2)
+MSElist[9]<-mean(inre9$coefficients^2)
+
+MSElist1<-c(1:9)
+
+yhatp1<-predict(inre1, newdata = test.data.x)
+MSElist1[1]<-mean((test.data$logY - yhatp1)^2)
+
+
+yhatp2<-predict(inre2, newdata = test.data.x)
+MSElist1[2]<-mean((test.data$logY - yhatp2)^2)
+
+yhatp3<-predict(inre3, newdata = test.data.x)
+MSElist1[3]<-mean((test.data$logY - yhatp3)^2)
+
+yhatp4<-predict(inre4, newdata = test.data.x)
+MSElist1[4]<-mean((test.data$logY - yhatp4)^2)
+
+yhatp5<-predict(inre5, newdata = test.data.x)
+MSElist1[5]<-mean((test.data$logY - yhatp5)^2)
+
+yhatp6<-predict(inre6, newdata = test.data.x)
+MSElist1[6]<-mean((test.data$logY - yhatp6)^2)
+
+yhatp7<-predict(inre7, newdata = test.data.x)
+MSElist1[7]<-mean((test.data$logY - yhatp7)^2)
+
+yhatp8<-predict(inre8, newdata = test.data.x)
+MSElist1[8]<-mean((test.data$logY - yhatp8)^2)
+
+yhatp9<-predict(inre9, newdata = test.data.x)
+MSElist1[9]<-mean((test.data$logY - yhatp9)^2)
+mse(test.data$logY,predict(inre9, newdata = test.data.x))
+
+```
+
+
+```{r, echo=FALSE}
+par(mfrow = c(1,2))
+plot(1:9,MSElist, lty = 1, type = "l",col = "blue",
+     xlab = "Number of steps in the backward selection",
+     ylab = "MSE of the model",
+     main = "Squared error loss for training data")
+MSElist[c(1,2)]
+
+plot(1:9,MSElist1, lty = 1, type = "l", col ="red",
+     xlab = "Number of steps in the backward selection",
+     ylab = "MSE of the model",
+     main = "Squared error loss for testing data")
+MSElist1[c(4,5,9)]
+```
+
+The training squared error lost falls off slightly and quickly climbs up until the final model. The training MSE gets minimized at the step two, which is the step producing the best model by training MSE. The model we should pick is:
+
+```{r, echo=FALSE}
+inre2$call
+```
+
+The squared error lost for test data fluctuates through the backward selection process. The model first decreases in MSE until step 5, then undergos a upward and then downward trend, eventually settles at the step 9. The minimum MSE of the models achieves at step 5, suggesting that the best model based on testing MSE should be model 5 but not the final model for the backward selection approach. The model we use is:
+
+```{r, echo=FALSE}
+inre5$call
+```
+
+
+## (h)
+
+In this section, we examine ways in the regression modelling and how they produce better model based on the testing MSE. In the earlier section, we mainly use the backward selection, but we will use the step wise approach in terms of the criteria of partial F test, AIC and BIC. The three results are shown below. We then apply the exhausted search using BIC after. I will consider curvature also.
+
+```{r include=FALSE}
+train.data$srx2<-sqrt(train.data$x2)
+train.data$srx3<-sqrt(train.data$x3)
+train.data$srx4<-sqrt(train.data$x4)
+
+test.data$srx2<-sqrt(test.data$x2)
+test.data$srx3<-sqrt(test.data$x3)
+test.data$srx4<-sqrt(test.data$x4)
+```
+
+```{r, echo = TRUE, results = "hide", message=FALSE, warning=FALSE}
+modelboth_p<-ols_step_both_p(lm(logY~., data=subset(train.data, select=c(-Y))),pent = 0.05,prem = 0.1)
+nullmodel<-lm(logY~1, data = train.data)
+modelboth_aic<-stepAIC(nullmodel, direction = "both", scope = list(lower = ~1, upper = ~x1+x2+x3+x4+x5+x6+x7+srx2+srx3+srx4))
+n<-dim(train.data)[1]
+modelboth_bic<-stepAIC(nullmodel, direction = "both", k=log(n),scope = list(lower = ~1, upper = ~x1+x2+x3+x4+x5+x6+x7+srx2+srx3+srx4))
+```
+
+We can see the step wise processes with regard to partial F test and the AIC produce the same model. We can compare its testing MSE with the BIC model:
+
+```{r, include=FALSE}
+test.data.x <- data.frame(test.data[,c(2:8,10:12)])
+names(test.data.x) <- c("x1","x2","x3","x4","x5","x6","x7","srx2","srx3","srx4")
+
+modelaic<-lm(logY ~ srx2 + x6 + x4 + x5, data = train.data)
+modelbic<-lm(logY ~ srx2 + x6, data = train.data)
+yhath1<-predict(modelbic, newdata = test.data.x)
+```
+```{r, echo=FALSE}
+mse(test.data$logY,predict(modelaic, newdata = test.data.x));mse(test.data$logY,yhath1)
+```
+
+As we can see the results, the test data suggest the AIC model is a better model providing a lower testing MSE.
+
+## (i)
+
+The model is shown as below.Three high leverage points appear as point 31,110 and 259. We consider to remove the highest two influential points and to refit the model again.
+```{r, echo=FALSE}
+modelaic$call
+```
+
+```{r}
+modelaicad<-lm(logY ~ srx2 + x6 + x4 + x5, data = train.data[c(-31,-259),])
+par(mfrow = c(2,2))
+plot(modelaicad,which = c(1,2,3,4))
+```
+
+New influential points appear but as they are all similar value, which has much smaller cook distance than before. We will consider to keep them in our model. To check if the variables are correlated, the variance inflation factor is shown below. The model can be expressed as:
+
+$$
+log(Y) = 4.949892+ 1.041477*sqrt(x_2)-1.209650*x_6medium -0.488577* x_6high + 0.060145*x_4 + 0.717215*x_5
+$$
+```{r}
+confint(modelaicad)
+```
+
+As we can see from confident interval table, the top 4 predictors have narrow confident intervals and only x5 have large confident interval compared to others, but not too large as well. The coefficient in our model is reasonably checked.
+
+The coefficient in our model can be interpreted as below:
+
+Holding all the variables in our model constant: The procedure increases one unit, the claims payment increase the e to the power of square of 1.041477 times.
+
+More times of emergency room visits correspond to the claims payment decrease e to the power of -0.060145 times.
+
+The occurrence of complications increases one times, the claims payment decrease e to the power of -0.717215 times.
+
+The median level of comorbidities decreases the claim payment by e to the power of -1.041477 times, while the high level of comorbidities decreases the claim payment by e to the power of -0.488577 times.

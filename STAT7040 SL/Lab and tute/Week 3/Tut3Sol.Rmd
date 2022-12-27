@@ -1,0 +1,277 @@
+---
+title: Tutorial 3 Solutions  
+author: STAT 4040/7040
+output:
+    pdf_document:
+        includes:
+            in_header: mystyletut.sty
+---
+
+---
+\large
+
+* Textbook key:
+    * [ISL] *Introduction to Statistical Learning*
+    * [ESL] *Elements of Statistical Learning*
+
+    
+  
+1. **3.4 Solution:**    
+ 
+     a.  We would expect the training RSS (residual sum of squares) to be smaller for the cubic regression since that functional form has more flexibility to fit the training data set with and thus it will be able to do a better job.
+     
+     b.  Since the true model is linear, we would expect that on the test set the linear model would perform better than the cubic model.    
+     
+     c.  On the training set, the cubic model will always have a lower RSS measurement since the procedure used to fit the coefficients in the cubic model has more flexibility.
+     
+     d.  On the test set, which model performs better depends on how non-linear the true underlying model is and how much data we were given to fit the models using. If the true underlying model is highly non-linear then we would expect the cubic model to perform better than the linear model. If however we were given only very few data points $n$ then due to errors in fitting the cubic model it might perform worse on the test set than the linear model. This is because with only a few data points to fit the cubic model, it will have more variance than the linear model, thus it could result in a worse *out-of-sample* fit.
+
+    **3.10 Solution:** 
+    
+    a.  Let's fit the linear regression model and get a summary of the results:
+    
+    ```{r}
+    library(ISLR)
+    data(Carseats)
+    
+    mod <- lm(Sales ~ Price + Urban + US, data=Carseats)
+    summary(mod)
+    ```
+
+    b.  The summary table indicates that the coefficient for *Price* is negative (and statistically significant), showing that as the price increases sales decrease. The coefficient for *UrbanYes* is negative (but not statistically significant). If it was significant, we could conclude that an urban environment has less sales than a rural environment. The coefficient for *USYes* is positive and statistically significant indicating that stores in the US have increased sales over ones that are not located in the US.
+    
+    c.  Let's write out the model:
+    
+    \begin{eqnarray*}
+    \widehat{\textrm{Sales}} &=& \hat{\beta}_0 + \hat{\beta}_1 \textrm{Price} + \hat{\beta}_2 \textrm{UrbanYes} +  \hat{\beta}_3 \textrm{USYes} \\
+                    &=& 3.043 - 0.054 \textrm{Price} - 0.022 \textrm{UrbanYes} + 1.201 \textrm{USYes} 
+    \end{eqnarray*}
+    
+        * Where *Yes* indicates that the variable is true, thus we set that variable equal to 1 (0 otherwise).    
+        
+    d.  We can reject the null hypothesis for *Sales* and *US*.  For US let's explicitly write out the t-test and determine the p-value.  We are testing:
+    
+    $$H_0: \beta_3 = 0,  \ \ H_a: \beta_3 \not=0$$    
+    
+    Our observed test statistic is:
+    
+    $$t_{obs} = \frac{ \hat{\beta}_3 - \beta_3}{SE(\hat{\beta}_3)} = \frac{ 1.2005 - 0}{0.2590} = 4.63$$
+    
+    Under the null hypothesis, this statistic has a T distribution with $n-(p+1) = 400 - 4 = 396$ degrees of freedom.  Let's determine the p-value (remember we have a two sided alternative):
+    
+    \begin{eqnarray*}
+    \textrm{p-value} &=& P(T_{df=396} > 4.63) + P(T_{df=396} < - 4.63) \\
+    &=& 2 P(T_{df=396} < - 4.63)
+    \end{eqnarray*}
+
+    ```{r}
+    p.value <- 2*pt(-4.63, df=396)
+    p.value
+    ```
+    
+    As this is less than our standard $\alpha$ level of $0.05$, we reject the null hypothesis!
+
+    e.  Let's refit the model after dropping the *Urban* covariate:
+    
+    ```{r}
+    mod2 <- lm(Sales ~ Price + US, data=Carseats)
+    summary(mod2)
+    ```
+
+    f.  The model in (a) has an $R^2 = 0.2393$ (with $\hat{\sigma} = 2.472$) and the model in (e) has an  $R^2 = 0.2393$ (with $\hat{\sigma} = 2.469$). These two models have the same value of $R^2$ but the second model has a smaller estimate of error and thus suggesting a better model for the data.
+    
+    g.  To get 95\% confidence intervals for the regression coefficients for the model in (e) we can use *confint()*:
+    
+    ```{r}
+    confint(mod2)
+    ```
+    
+    Let's do this "by hand" for $\beta_3$:
+    
+    $$\hat{\beta}_3 \pm t^* SE(\hat{\beta}_3)$$
+    
+    Where $t^*$ is the value such that $P(T_{df=397} > t^*) = 0.05/2$.
+    
+    
+    ```{r}
+    1.19964 - qt(0.975, df=397)*0.25846
+    1.19964 + qt(0.975, df=397)*0.25846
+    ```
+
+    h.  One way to check for outliers is to examine a boxplot of the residuals.
+    
+    ```{r}
+    boxplot(mod2$res)
+    ```
+    
+    From the boxplot it appears we have three outliers.  Let's get the values and id number:
+    
+    ```{r}
+    box <- boxplot(mod2$res, plot=FALSE)
+    box$out
+    ```
+    
+    Let's see which (if any) data points have high leverage.  To examine leverage we get the "Hat" matrix (H).  This matrix puts the "hat" onto $y$:
+    
+    \begin{eqnarray*}
+    \hat{\bs{y}} &=& \bs{X} \hat{\bs{\beta}} \\
+    &=& \bs{X} (\bs{X}'\bs{X})^{-1} \bs{X}'\bs{y} \\
+    &=& \bs{H} \bs{y}
+    \end{eqnarray*}
+    
+    ```{r}
+    X <- model.matrix(mod2)
+    H <- X%*%solve(t(X)%*%X)%*%t(X)
+    h.i <- diag(H)
+    h.i[1:5]
+    ```
+    
+    We can get these quickly using the *influence()* command:
+    
+
+    ```{r}
+    lev <- influence(mod2)$hat
+    lev[1:5]
+    ```
+    
+    Note that the leverages are positive.  We will use a half normal plot (in the *faraway* library) to look for large leverages:
+    
+    ```{r}
+    library(faraway)
+    halfnorm(lev, ylab="Leverages", nlab=length(lev[lev>2*(3)/400]))
+    abline(h=2*(3)/400, lwd=3, col="red")
+    ```
+    
+    Based on the heuristic of looking for leverage values greater than $2 \frac{p+1}{n}$, we can identify quite a few data points (a boxplot also shows a number of outliers).  However, most data points, except for 43, don't seem to separate too much from the "pack".  
+    
+    
+    
+    **3.14 Solution:**     
+    
+    a.  Let's run the commands:
+    
+    ```{r}
+    set.seed(1)
+    n <- 100
+    x1 <- runif(n)
+    x2 <- 0.5*x1+rnorm(n)/10
+    y <- 2 + 2*x1 + 0.3*x2 + rnorm(n)
+    ```
+    
+    The linear regression model is:
+    
+    \begin{eqnarray*}
+    y &=& \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \epsilon \\
+    &=& 2 + 2 x_1 + 0.3 x_2 + \epsilon \\
+    \lefteqn{\epsilon \sim \textrm{normal}(0, \sigma^2=1)}
+    \end{eqnarray*}
+    
+    We can actually rewrite this in terms of just $x_1$:
+    
+    \begin{eqnarray*}
+    y &=& \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \epsilon_1 \\
+    &=& \beta_0 + \beta_1 x_1 + \beta_2 (0.5 x_1 + \epsilon_2) + \epsilon_1 \\
+    &=& \beta_0 + \beta_1 x_1 + \beta_2 0.5 x_1 + \epsilon_3\\
+    &=& 2 + 2 x_1 + (0.3) 0.5 x_1 + \epsilon_3\\
+    &=& 2 + 2.15 x_1  + \epsilon \\
+    \lefteqn{\epsilon \sim \textrm{normal}(0, \sigma^2=1)}
+    \end{eqnarray*}
+    
+    b.  Let's determine first determine the variance of $x_1$ and $x_2$ and the covariance between $x_1$ and $x_2$:
+    
+    \begin{eqnarray*}
+    X_1 &\sim& \textrm{uniform}(0,1) \\
+    V(X_1) &=& 1/12    
+    \end{eqnarray*}
+    
+    \begin{eqnarray*}
+    X_2 &=& 0.5 X_1 + Z \\
+    Z &\sim& \textrm{normal}(0, \sigma^2 = 0.01) \\
+    V(X_2) &=& V(0.5 X_1 + Z) \\
+    &=& 0.25 (1/12) + 0.01 = 0.03083333
+    \end{eqnarray*}
+    
+    \begin{eqnarray*}
+    Cov(X_1, X_2) &=&  Cov(X_1, 0.5 X_1 + Z) \\
+    &=& Cov(X_1, 0.5 X_1) + Cov(X_1, Z) \\
+    &=& 0.5 V(X_1) + 0\\
+    &=& 0.5 (1/12)
+    \end{eqnarray*}
+    
+    So the correlation is:
+    
+    \begin{eqnarray*}
+    \rho &=& \frac{0.5 (1/12)}{\sqrt{(1/12)} \sqrt{(0.25 (1/12) + 0.01)} } \\
+    &\approx& 0.8219949
+    \end{eqnarray*}
+    
+    The estimated correlation is:
+    
+    ```{r}
+    cor(x1, x2)
+    ```
+    
+    Let's examine a scatter plot of the two variables:
+    
+    ```{r}
+    plot(x2, x1, pch=16, col="blue")
+    ```
+    
+    The variables are quite highly correlated.
+    
+    c. Let's fit the regression model and get a summary of the results:
+    
+    ```{r}
+    mod <- lm(y ~ x1 + x2)
+    summary(mod)
+    ```
+    
+    From the summary table, only $x_1$ is statistically significant (i.e. we can reject the null hypothesis $H_0: \beta_1=0$ at $\alpha=0.05$ (barely).  It appears we are not doing a great job of estimating the parameters.  For example $\beta_1=2$, but we estimated $\hat{\beta}_1 = 1.440$.  
+    
+    d. Now let's fit the model with just $x_1$:
+    
+    ```{r}
+    mod2 <- lm(y ~ x1)
+    summary(mod2)
+    ```
+    
+    We can now see that $x_1$ is an important covariate.
+    
+    
+    e. Now let's fit the model with just $x_2$:
+    
+    ```{r}
+    mod3 <- lm(y ~ x2)
+    summary(mod3)
+    ```
+    
+    We can also see that $x_2$ is an important covariate.
+    
+    f.  These results don’t contradict each other due to the strong correlation between the two variables.  Essentially the two covariates represent similar pieces of information and including both in the model increases the standard error for each of them.   
+
+    g.  Let's add the additional data point and make some scatter plots.  From the scatter plots of $y$ against each $x$, the point doesn't appear to be too outlying.  However, when looking at the plot of $x_2$ against $x_1$, we do see that the point is an outlier.
+    
+    ```{r}
+    x1 <- c(x1, 0.1)
+    x2 <- c(x2, 0.8)
+    y <- c(y, 6)
+    
+    par(mfrow=c(2,2))
+    plot(x1, y); points(x1[101], y[101], pch=21, col="red")
+    plot(x2, y); points(x2[101], y[101], pch=21, col="red")
+    plot(x2, x1); points(x2[101], x1[101], pch=21, col="red")
+    ```
+    
+    Let's see if this point is a high leverage point:
+    
+    ```{r}
+    mod4 <- lm(y ~ x1 + x2)
+    summary(mod4)
+    lev <- influence(mod4)$hat
+    halfnorm(lev, ylab="Leverages", nlab=length(lev[lev>2*(3)/101]))
+    abline(h=2*(3)/101, lwd=3, col="red")
+    lev[101]
+    ```
+    
+    We do see that the new observation has quite high leverage compared to the rest of the data.  We see that the point does change the estimated coefficients compared to the model in (c).
+    
