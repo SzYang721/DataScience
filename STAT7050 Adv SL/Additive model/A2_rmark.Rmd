@@ -1,0 +1,339 @@
+---
+title: "Assignment 2 STAT7050"
+author: "Song Ze Yang, u7192786"
+date: "2022-09-16"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, results='hide',echo=TRUE,warning=FALSE,message=FALSE}
+##### Package Loading
+
+library(corrplot)
+library(dplyr)
+library(tidyverse)
+library(mgcv)
+library(npreg)
+library(np)
+library(data.table)
+
+ksmooth.gcv <- function(x, y){
+  nobs <- length(y)
+  xs <- sort(x, index.return = TRUE)
+  x <- xs$x
+  y <- y[xs$ix]
+  xdif <- outer(x, x, FUN = "-")
+  tune.ksmooth <- function(h){
+    xden <- dnorm(xdif / h)
+    xden <- xden / rowSums(xden)
+    df <- sum(diag(xden))
+    fit <- xden %*% y
+    mean((fit - y)^2) / (1 - df/nobs)^2
+  }
+  xrng <- diff(range(x))
+  oh <- optimize(tune.ksmooth, interval = c(xrng/nobs, xrng))$minimum
+  if(any(oh == c(xrng/nobs, xrng)))
+    warning("Minimum found on boundary of search range.\nYou should retune model with expanded range.")
+  xden <- dnorm(xdif / oh)
+  xden <- xden / rowSums(xden)
+  df <- sum(diag(xden))
+  fit <- xden %*% y
+  list(x = x, y = fit, df = df, h = oh)
+}
+
+##### Data Loading
+
+getwd()
+setwd("E:/ANU Sem 3/STAT3050STAT4050STAT7050 - Advanced Statistical Learning - Sem 2 2022/A2")
+HE<-read_csv(file = "HE.csv")
+GHE<-read_csv(file = "GHE.csv")
+GDP<-read_csv(file = "GDP.csv")
+DR_young<-read_csv(file = "DR_young.csv")
+DR_old<-read_csv(file = "DR_old.csv")
+
+```
+
+The study between health-care expenditure and income can be conducted using the health-care expenditure (HE), income (GDP), the proportions of population aged below 14 and above 65 over all population (DR~young~ and DR~old~) and the proportion of government fundings invested on health care industry (GHE). The 18 OECD countrys provide data in 5 different data set.
+
+## Question 1
+
+We consider the non-parameter regression model. The model takes 4 input,namely GDP, GHE, DR~young~ and DR~old~ and return the predicted value for the health-care expenditure (HE). 
+
+$$
+y^{(i)}_t = g_i(x^{(i)}_{1t},x^{(i)}_{2t}, x^{(i)}_{3t}, x^{(i)}_{4t})+ ε^{(i)}_t, t = 1, 2, . . . , T.
+$$
+
+The principal component analysis is used here to reduce dimension of our input. The method to choose the number of principal component score is the difference of eigenvalues: $$max_i (\lambda_i-\lambda_{i+1})$$
+
+Under this criterion, we just keep the number of PCs after which the largest gap appears. $$(\lambda_r-\lambda_{r+1})$$  
+
+As the PCA is scaled, all the corresponding value is also scales, for instance, the ~y_i~. This makes the each response and its predicted value to be on the same scale and the MSE makes more sense. 
+
+Then we can apply kernel smoothing and smoothing spline method to get the prediction. Notice that the ksmooth() function will not make prediction on the test data easy. Therefore, a npreg() is performed to estimate a kernel smoothing spline using Gaussian kernel with local linear and to make prediction on the test data. To reduce the uncertainty in extrapolation, therefore the local linear fit is considered here.
+
+The result is shown below.
+
+```{r Question 1,warning=FALSE, message=FALSE,include=FALSE}
+
+country<-t(HE[,1])
+countrylist<-list()
+model_ss<-list()
+model_kernel<-list()
+MSE_train_ks<-NULL
+MSE_test_ks<-NULL
+MSE_train_ss<-NULL
+MSE_test_ss<-NULL
+fit_value_ks<-NULL
+fit_value_ss<-NULL
+for (i in 1:length(country)){
+  ### Get data of each country
+  country_data <-as.data.frame(t(rbind(HE[i,-1],GHE[i,-1],GDP[i,-1],DR_young[i,-1],DR_old[i,-1])))
+  colnames(country_data)<-c("HE","GHE","GDP","DR_young","DR_old")
+  countrylist[[i]]<-country_data
+  ###
+  
+  ### apply the dimension reduction method
+  PCA_train <- as.data.frame(prcomp(country_data[1:30,2:5], scale. = TRUE)$x)
+  PCA_test <- as.data.frame(prcomp(country_data[-c(1:30),2:5], scale. = TRUE)$x)
+  y_train<-scale(country_data$HE)[1:30]
+  y_test<-scale(country_data$HE)[-c(1:30)]
+  mod_data<-cbind(y_train,PCA_train)
+  ###
+  
+  ### Kernel smoothing method
+  ## ksmooth.gcv, ksmooth() is used but cannot make prediction out of it. npreg() provides this functionality.
+  # Just for prediction
+  bw <- npregbw(y_train~PC1,data = mod_data,regtype = "ll")
+  mod_kernel<-npreg(bw,data = mod_data)
+  model_kernel[[i]]<-mod_kernel
+  ###
+  
+  ### Smoothing spline method
+  mod_ss<-ss(PCA_train$PC1,y_train, all.knots = TRUE, method = "GCV")
+  model_ss[[i]]<-mod_ss
+  ###
+  
+  ### Calculate the train and test MSE for kernel smoothing method
+  MSE_train_ks<-rbind(MSE_train_ks,mod_kernel$MSE)
+  pred<-predict(mod_kernel,newdata = PCA_test)
+  fit_value_ks<-rbind(fit_value_ks,cbind(as.data.frame(t(fitted(mod_kernel))),as.data.frame(t(pred))))
+  MSE_test_ks<-rbind(MSE_test_ks,mean((pred- y_test)^2))
+  ###
+  
+  ### Calculate the train and test MSE for Smoothing spline method
+  MSE_train_ss<-rbind(MSE_train_ss,mean((mod_ss$y - y_train)^2))
+  pred<-predict.ss(mod_ss,x = PCA_test$PC1)
+  fit_value_ss<-rbind(fit_value_ss,cbind(as.data.frame(t(mod_ss$y)),t(pred$y)))
+  MSE_test_ss<-rbind(MSE_test_ss,mean((pred$y - y_test)^2))
+  ###
+  
+}
+
+```
+
+```{r eval=FALSE,echo=TRUE}
+
+country<-t(HE[,1])
+countrylist<-list()
+model_ss<-list()
+model_kernel<-list()
+MSE_train_ks<-NULL
+MSE_test_ks<-NULL
+MSE_train_ss<-NULL
+MSE_test_ss<-NULL
+fit_value_ks<-NULL
+fit_value_ss<-NULL
+for (i in 1:length(country)){
+  ### Get data of each country
+  country_data <-as.data.frame(t(rbind(HE[i,-1],GHE[i,-1],GDP[i,-1],DR_young[i,-1],DR_old[i,-1])))
+  colnames(country_data)<-c("HE","GHE","GDP","DR_young","DR_old")
+  countrylist[[i]]<-country_data
+  ###
+  
+  ### apply the dimension reduction method
+  PCA_train <- as.data.frame(prcomp(country_data[1:30,2:5], scale. = TRUE)$x)
+  PCA_test <- as.data.frame(prcomp(country_data[-c(1:30),2:5], scale. = TRUE)$x)
+  y_train<-scale(country_data$HE)[1:30]
+  y_test<-scale(country_data$HE)[-c(1:30)]
+  mod_data<-cbind(y_train,PCA_train)
+  ###
+  
+  ### Kernel smoothing method
+  ## ksmooth.gcv, ksmooth() is used but cannot make prediction out of it. npreg() provides this functionality.
+  # Just for prediction
+  bw <- npregbw(y_train~PC1,data = mod_data)
+  mod_kernel<-npreg(bw,data = mod_data)
+  model_kernel[[i]]<-mod_kernel
+  ###
+  
+  ### Smoothing spline method
+  mod_ss<-ss(PCA_train$PC1,y_train, all.knots = TRUE, method = "GCV")
+  model_ss[[i]]<-mod_ss
+  ###
+  
+  ### Calculate the train and test MSE for kernel smoothing method
+  MSE_train_ks<-rbind(MSE_train_ks,mod_kernel$MSE)
+  pred<-predict(mod_kernel,newdata = PCA_test)
+  fit_value_ks<-rbind(fit_value_ks,cbind(as.data.frame(t(fitted(mod_kernel))),as.data.frame(t(pred))))
+  MSE_test_ks<-rbind(MSE_test_ks,mean((pred- y_test)^2))
+  ###
+  
+  ### Calculate the train and test MSE for Smoothing spline method
+  MSE_train_ss<-rbind(MSE_train_ss,mean((mod_ss$y - y_train)^2))
+  pred<-predict.ss(mod_ss,x = PCA_test$PC1)
+  fit_value_ss<-rbind(fit_value_ss,cbind(as.data.frame(t(mod_ss$y)),t(pred$y)))
+  MSE_test_ss<-rbind(MSE_test_ss,mean((pred$y - y_test)^2))
+  ###
+  
+}
+
+```
+
+
+```{r}
+colnames(fit_value_ks)<-colnames(HE[,-1])
+rownames(fit_value_ks)<-country
+fit_value_ks
+
+colnames(fit_value_ss)<-colnames(HE[,-1])
+rownames(fit_value_ss)<-country
+fit_value_ss
+
+df_MSE<-as.data.frame(cbind(MSE_train_ks,MSE_test_ks,MSE_train_ss,MSE_test_ss))
+colnames(df_MSE)<-c("Train MSE Kernel smoothing","Test MSE Kernel smoothing","Train MSE Smoothing spline","Test MSE Smoothing spline")
+rownames(df_MSE)<-country
+df_MSE
+
+```
+
+## Question 2
+
+Now, let us assume that the model for each country is homogeneous. Under this homogeneous assumption, we can pool the data together and then get the smoothing spline fit. 
+
+$$
+g(.) := g_1(.) = g_2(.)= ... = g_{18}(.) 
+$$
+
+```{r}
+country<-t(HE[,1])
+
+pool_train<-data.frame(matrix(ncol = 5, nrow = 0))
+pool_test<-data.frame(matrix(ncol = 5, nrow = 0))
+for (i in 1:length(country)){
+  data <-data.table::transpose(rbind(country[i],HE[i,-1],GHE[i,-1],GDP[i,-1],DR_young[i,-1],DR_old[i,-1]))
+  colnames(data)<-c("Country","HE","GHE","GDP","DR_young","DR_old")
+  
+  pool_train<-rbind(pool_train,data[1:30,])
+  pool_test<-rbind(pool_test,data[-c(1:30),])
+}
+
+for (i in 2:6){
+  pool_train[,i]<-as.numeric(pool_train[,i])
+  pool_test[,i]<-as.numeric(pool_test[,i])
+}
+
+PCA_training<-as.data.frame(prcomp(pool_train[,3:6], scale. = TRUE)$x)
+PCA_testing<-as.data.frame(prcomp(pool_test[,3:6], scale. = TRUE)$x)
+y_train2<-scale(pool_train$HE)
+y_test2<-scale(pool_test$HE)
+mod_data2<-cbind(y_train2,PCA_training)
+mod_ss2<-ss(PCA_training$PC1,y_train2, all.knots = TRUE, method = "GCV")
+
+MSE_train_ss2<-mean((mod_ss2$y - y_train2)^2)
+pred2<-predict.ss(mod_ss2,x = PCA_testing$PC1)
+MSE_test_ss2<-mean((pred2$y - y_test2)^2)
+MSE_train_ss2
+MSE_test_ss2
+```
+
+## Question 3 
+
+The resulting MSE from Q1 and Q2 is shown below. The homogeneous model yields much lower test MSE than the non-homogeneous model.
+
+```{r}
+mean(MSE_test_ss)
+MSE_test_ss2
+```
+
+The averaged model (non-homogeneous model) is in the form of below. This formulation is also known as the committee formulation, where each model is assigned equal weight. There are many ways to approach this. Here will elaborate by three points, the sample and population analogy, the over parameterization analogy and the model selection or cross validation analogy.
+
+$$
+g(.) = \Sigma^{m}_1 \ w_m*g_i(.) , \ w_m = 1/m ,\  where\ m = 18
+$$
+
+Firstly, the country data we gathered is a sub sample from the pooled data (the whole population). Therefore, we have:
+
+$$
+E[Y - \Sigma^{m}_1 \ w_m*g_i(.)]^2 \leq E[Y - g_M(.)]^2, \ where \ M = \ \Sigma^{M}_{i = 1} m_i
+$$
+
+The full model has g~M~ has smaller error than any single model (Hastie et al., 2017). Gather more information always facilitate us when getting a better model fit.
+
+Second analogy is parameterization. Let us suppose each model g~i~ has p parameters, then the overall model needs m times p parameters. However, the homogeneous model takes only p parameters to estimate. The more parameterization the model has makes the model more complicated. The classical bias-variance trade-off does not support too complex parameterization model and this leads to higher test MSE and lower training MSE.
+
+This problem can also be approached from cross validation. The tuning method when fitting a smoothing spline is set as "GCV" (the generalized cross validation). The hyper parameter to tune is bandwidth. For each non-homogeneous model, the hyper parameter is only tuned at its best local minimum by only a sub sample in one country, n is number of fold in cross validation. However, the homogeneous model is tuned at the global minimum regarding to the whole population (pooled data).
+
+## Question 4 
+
+Suppose function g follows a additive model. Then we get the following result.
+
+$$
+g_i(x^{(i)}_{1t}*,x^{(i)}_{2t}, x^{(i)}_{3t}, x^{(i)}_{4t}) = f_1(x^{(i)}_{1t})+ f_2(x^{(i)}_{2t})+ f_3(x^{(i)}_{3t})+f_4(x^{(i)}_{4t}) 
+$$
+
+```{r}
+scale_pool_tr<-as.data.frame(scale(pool_train[,-1]))
+scale_pool_test<-as.data.frame(scale(pool_test[,-1]))
+mod_gam_pool=gam(HE~s(GHE)+s(GDP)+s(DR_old)+s(DR_young),data = scale_pool_tr)
+summary(mod_gam_pool)
+pred_additive4<-predict.gam(mod_gam_pool,newdata = scale_pool_test)
+as.data.frame(cbind(pool_test$Country,pred_additive4))
+mean((pred_additive4 - scale_pool_test$HE)^2)
+```
+
+## Question 5 
+
+Suppose the function g follows another additive structure below. Then we get the following result.
+
+$$
+g_i(x^{(i)}_{1t}*,x^{(i)}_{2t}, x^{(i)}_{3t}, x^{(i)}_{4t}) = \gamma_1(x^{(i)}_{1t},x^{(i)}_{2t})+ \gamma_3(x^{(i)}_{3t})+\gamma_4(x^{(i)}_{4t}) 
+$$
+
+```{r}
+mod_gam_pool5 <- gam(HE~s(GDP,DR_young)+s(DR_old)+s(GHE),data = scale_pool_tr)
+summary(mod_gam_pool5)
+pred_additive5<-predict.gam(mod_gam_pool5,newdata = scale_pool_test)
+as.data.frame(cbind(pool_test$Country,pred_additive5))
+mean((pred_additive5 - scale_pool_test$HE)^2)
+```
+
+## Question 6 
+
+The test MSE for question 4 model is 0.7720145, while that of the model for question 5 is 0.6115571. The test MSE is reduced after we combine the GDP and DR~young~. We can even fit a homogeneous model in question 2 to further compare. The homogeneous model yields even lower test MSE. 
+
+```{r}
+mean((pred_additive4 - scale_pool_test$HE)^2)
+mean((pred_additive5 - scale_pool_test$HE)^2)
+## homogeneous model in Q2
+mod_gam_pool2=gam(HE~s(GHE,GDP,DR_old,DR_young),data = scale_pool_tr)
+pred_additive2<-predict.gam(mod_gam_pool2,newdata = scale_pool_test)
+mean((pred_additive2 - scale_pool_test$HE)^2)
+```
+
+The additive model uses a iterative procedure to fit. It can reach a dimension reduction by considering each single variable and fitting a specific function, such as smoothing spline, in the back fitting algorithm. However, because of this dimension reduction result, the GAM model cannot take into account the variable interaction, which commonly exists in the real setting. 
+
+From the below graph, we can see that all the covariates in our training data set are correlated, some of which has high correlation, such as GHE with DR_old, GDP with DR_young, GDP with DR_old, DR_young with DR_old.
+
+```{r}
+cor(pool_train[,-1])
+corrplot(cor(pool_train[,-1]))
+```
+
+In our mgcv packages, multi-dimensional smooths are available using penalized thin plate regression splines (isotropic) or tensor product splines (when an isotropic smooth is inappropriate), and we can add smooths (Wood, 2022). The multi-dimension smooths produce better result than one-dimensional smooth by utilizing more information. However, the downside of multi-dimension is that it suffers more edge effect than one-dimension. Here, we would like to get a smoother fit so that the edge effect and extrapolation is reasonably considered as mild problem.
+
+## Reference 
+Hastie, T., Tibshirani, R., & Friedman, J. H. (2009). The elements of statistical learning: data mining, inference, and prediction. 2nd ed. New York, Springer.
+
+Wood, S., 2022. [online] Cran.r-project.org. Available at: <https://cran.r-project.org/web/packages/mgcv/mgcv.pdf#page=267&zoom=100,133,726> [Accessed 18 September 2022].
