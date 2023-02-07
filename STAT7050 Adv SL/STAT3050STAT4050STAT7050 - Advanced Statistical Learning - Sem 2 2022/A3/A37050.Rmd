@@ -1,0 +1,205 @@
+---
+title: 'STAT7050: Assignment 3'
+author: "Songze Yang, u7192786"
+date: "2022-10-11"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tensorflow)
+library(tidyverse)
+library(keras)
+library(caret)
+library(e1071)
+library(mda)
+library(penalizedLDA)
+library(devtools)
+source_url('https://gist.githubusercontent.com/fawda123/7471137/raw/466c1474d0a505ff044412703516c34f1a4684a5/nnet_plot_update.r')
+```
+
+The SPAM data set has shown below. The data is divided into two parts based on the variables "testid". As various methods applied to our data, the standardization is utilized to result a better fit.
+
+```{r results='hide'}
+SPAM <- read_csv("E:/ANU Sem 3/STAT3050STAT4050STAT7050 - Advanced Statistical Learning - Sem 2 2022/A3/SPAM.csv")
+
+preproc.param <- SPAM %>% 
+  preProcess(method = c("center", "scale"))
+
+
+train_raw<-SPAM[which(SPAM$testid == 0),]
+test_raw<-SPAM[which(SPAM$testid == 1),]
+
+train <- preproc.param %>% predict(train_raw)
+test <- preproc.param %>% predict(test_raw)
+```
+
+## Question 1
+
+Firstly, a neural network model is fitted followed by its train and test MSE.
+
+```{r}
+n<-nrow(train)
+x_train <- model.matrix (spam ~.-1, data = train[,-2])
+y_train <- train$spam
+y_tr <- to_categorical(y_train, 2)
+x_test <- model.matrix (spam ~.-1, data = test[,-2])
+y_test <- test$spam
+y_te <- to_categorical(y_test, 2)
+```
+
+The model is specified below.
+
+```{r}
+set.seed (13)
+model <- keras_model_sequential() %>% 
+  layer_dense(units = 256, activation = "relu", input_shape = ncol(x_train)) %>% 
+  layer_dropout(rate = 0.4) %>% 
+  layer_dense(units = 128, activation = "relu") %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 2, activation = "softmax")
+
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = "adam",
+  metrics = c("accuracy")
+)
+
+model %>% fit(x_train, y_tr, epochs = 200, verbose = 0)
+```
+
+```{r}
+train.mse_nnet<-model %>% evaluate(x_train,  y_tr, verbose = 2)
+nnet_train_error_rate<-1-train.mse_nnet[2]
+nnet_train_error_rate
+test.mse_nnet<-model %>% evaluate(x_test,  y_te, verbose = 2)
+nnet_test_error_rate<-1-test.mse_nnet[2]
+nnet_test_error_rate
+```
+
+The structure of the neural network is shown below.
+
+```{r}
+nnet_train_var<-model$variables
+summary(nnet_train_var)
+```
+
+The weight variables of the neural network are shown below.
+
+```{r}
+nnet_train_var
+```
+
+## Question 2
+
+Alternatively, support vector machine is fitted.
+
+```{r, results='hide'}
+set.seed(1)
+tune.out=tune(svm, factor(y_train)~., data=data.frame(y_train,x_train), kernel="radial", ranges = list(cost=c(5,6,7,8,9), gamma=c(0.01,0.02,0.03)))
+summary(tune.out)
+```
+
+```{r}
+bestmod=tune.out$best.model
+summary(bestmod)
+```
+
+The train and test MSE of SVM is similar to neural network.
+
+```{r}
+svm_train_ypred=predict(bestmod, data.frame(y_train,x_train))
+svm_train_error<-mean(svm_train_ypred != y_train)
+svm_test_ypred=predict(bestmod, data.frame(y_test,x_test))
+svm_test_error<-mean(svm_test_ypred != y_test)
+svm_train_error
+svm_test_error
+```
+
+## Question 3
+
+The flexible discriminant analysis is shown below with its train and test MSE.
+
+```{r}
+fda_model <- fda(spam~., data = train[,-2], method = mars)
+# Make predictions on train
+fda_pred_train <- fda_model %>% predict(train[,-2])
+# Model accuracy on train
+fda_train_error<-mean(fda_pred_train != train$spam)
+# Make predictions on test
+fda_pred_test <- fda_model %>% predict(test[,-2])
+# Model accuracy on test
+fda_test_error<-mean(fda_pred_test != test$spam)
+fda_train_error
+fda_test_error
+```
+
+
+## Question 4
+
+The penalized discriminant analysis is shown below followed by its train and test MSE.
+
+```{r, results='hide'}
+pda_y_train<-as.numeric(y_train)+1
+pda_y_test<-as.numeric(y_test)+1
+cv.out <-PenalizedLDA.cv(x_train,pda_y_train,lambdas=c(1e-4,1e-3,1e-2,.1,1),lambda2=.3)
+cv.out$bestK
+pda_out <- PenalizedLDA(x_train,pda_y_train,xte = x_test ,type="ordered",lambda=cv.out$bestlambda,K=cv.out$bestK, lambda2=.3)
+pda_train = predict.penlda(pda_out, xte = x_train)
+pda_train_error<-mean(unlist(pda_train)!=pda_y_train)
+pda_test_error<-mean(pda_out$ypred!=pda_y_test)
+```
+
+
+```{r}
+pda_train_error
+pda_test_error
+```
+
+
+
+## Question 5
+
+The information relates to the test result is shown below. 
+
+```{r}
+tes.res<-matrix(1:8,4,2)
+tes.res[,1]<-c(nnet_train_error_rate,svm_train_error,fda_train_error,pda_train_error)
+tes.res[,2]<-c(nnet_test_error_rate,svm_test_error,fda_test_error,pda_test_error)
+df<-as.data.frame(tes.res)
+colnames(df)<-c("Train error rate","Test error rate")
+rownames(df)<-c("Neural Network","SVM","FDA","PDA")
+df
+```
+
+Visualization is presented as follow.
+
+```{r}
+modname<-c("Neural Network","SVM","FDA","PDA")
+plot_df<-as.data.frame(t(rbind(c(modname,modname),c(df$`Train error rate`,df$`Test error rate`),c(rep("Train",4),rep("Test",4)))))
+colnames(plot_df)<-c("Models","Train/Test error rate","Indicator")
+
+ggplot(data=plot_df, aes(x = factor(Models,levels =  modname), y=`Train/Test error rate`, fill=Indicator)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  xlab('Model')+
+  theme_minimal()
+```
+
+First of all, all of the methods above are trying to find/approximate the true Bayesian posterior probability of spam given a bag of words. Therefore, the task is to find the true probability function.
+
+Neural network has taken the crown regrading the performance. The two hidden layers neural is known for its universal approximator property. The single perceptron approximates any linear function, while the two layers neural network can approximate any function of any class. In the SPAM case, the boundary for separation is not linear, which can be seen from the performance of FDA. The neural network performs a great approximation to this non-linear boundary.
+
+The support vector machine takes the second. It try to approximate the function by a kernel mapping (non-linear mapping). The kernel method in our context is the radial kernel. This kernel is very good in terms of non-linear mapping, however, in analogous to neural network, after a single projection, the class of spam is not necessary to be separable. Therefore, after tuning for the tolerance for error in the non-separable class, the performance is not better than the neural network.
+
+This is not true for neural network. The 2-layers neural work can be written as:
+
+$$
+P(spam = K|X = x) = O(g(l(x)))
+$$
+
+The O() function is the output layers. The two layers of non-linear projection approximates the unknown function better in our case. Also, if the sigmoid kernel is selected, the performance of the support vector machine may be more similar to the neural network with sigmoid as activation function.
+
+The basis expansion is also considered in the Flexible DA. Multivariate adaptive regression spline is used specifically. The assumption on the shape of the non-linear boundary adds additional information to our model. The true boundary may not be mars function. The assumption on a class of the function may lead to a exponential increase of the test error, which can be seen in our case.
+
+The basis expansion in DA with penalty forms PDA. The penalized DA shrinks the coefficient in the basis expansion based on a l-2 penalty. The results show that the discriminant analysis in our case may be underfitting because the unpenalized version yields a better result (FDA), yet this is not ture in penalized cased.

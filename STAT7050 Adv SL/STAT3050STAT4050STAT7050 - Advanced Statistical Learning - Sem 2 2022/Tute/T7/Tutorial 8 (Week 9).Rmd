@@ -1,0 +1,199 @@
+---
+title: "R Notebook: Boosting"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Recap
+
+$$G(x)=\textrm{sign}\left( \sum_{m=1}^M \alpha_mG_m(x) \right),$$
+where $\alpha_1,\cdots,\alpha_m$ are computed by the booting algorithm, and weight the contribution of each respective $G_m(x)$.
+
+Comparison of bagging and boosting:
+
+Bagging: taking multiple subsets of the training data set, then building multiple independent decision tree models, and then average the models allowing to create a very performant predictive model compared to the classical CART model.
+ 
+Boosting: similar to the bagging method, except that the trees are grown sequentially: each successive tree is grown using information from previously grown trees, with the aim to minimize the error of the previous models.
+
+
+
+
+
+# Adaboosting
+
+![](adaBoost.png)
+
+
+```{r}
+# Adaboosting Algorithm
+library(adabag)
+library(caret)
+data("iris")
+
+# creat training and test data
+set.seed(42)
+index <- createDataPartition(iris$Species , p =0.7, list = FALSE)
+train.iris <- iris[index,]
+test.iris <- iris[-index,]
+
+# Create the Model without Cross Validation with the help of Boosting Function
+model = boosting(Species~., data = train.iris, boos = TRUE, mfinal = 50)
+
+# Prediction of the Test Data
+pred = predict(model , test.iris)
+pred$confusion
+
+# Training the Data with Boosting with Cross Validation
+cvmodel = boosting.cv(Species ~., data = iris, boos = TRUE, mfinal = 10, v =5)
+cvmodel$confusion
+
+```
+
+
+# Gradient Boosting Using GBM Package
+![](gradientBoost.png)
+
+Let’s use **gbm** package in R to fit gradient boosting model.
+```{r}
+
+require(gbm)
+require(MASS)#package with the boston housing dataset
+
+#separating training and test data
+train=sample(1:506,size=374)
+```
+
+We will use the Boston housing data to predict the median value of the houses.
+```{r}
+Boston.boost=gbm(medv ~ . ,data = Boston[train,],distribution = "gaussian",n.trees = 10000,
+                  shrinkage = 0.01, interaction.depth = 4)
+Boston.boost
+
+summary(Boston.boost) #Summary gives a table of Variable Importance and a plot of Variable Importance
+```
+
+The above Boosted Model is a Gradient Boosted Model which generates 10000 trees and the shrinkage parameter 
+$\lambda=0.01$ which is also a sort of learning rate. Next parameter is the interaction depth $d$ which is the total splits we want to do.So here each tree is a small tree with only 4 splits. 
+
+The summary of the Model gives a feature importance plot.In the above list is on the top is the most important variable and at last is the least important variable.
+
+And the 2 most important features which explain the maximum variance in the Data set is **lstat** i.e lower status of the population (percent) and **rm** which is average number of rooms per dwelling.
+
+## Plotting the Partial Dependence Plot
+
+The partial Dependence Plots will tell us the relationship and dependence of the variables $X_i$ with the Response variable $Y$.
+
+```{r}
+#Plot of Response variable with lstat variable
+plot(Boston.boost,i="lstat") 
+#Inverse relation with lstat variable
+
+plot(Boston.boost,i="rm") 
+#as the average number of rooms increases the the price increases
+```
+
+The above plot simply shows the relation between the variables in the x-axis and the mapping function $f(x)$ on the y-axis.First plot shows that **lstat** is negatively correlated with the response mdev, whereas the second one shows that rm is somewhat directly related to **mdev**. 
+
+```{r}
+cor(Boston$lstat,Boston$medv)#negetive correlation coeff-r
+
+cor(Boston$rm,Boston$medv)#positive correlation coeff-r
+```
+
+## Prediction on Test Set
+
+We will compute the Test Error as a function of number of Trees.
+```{r}
+n.trees = seq(from=100 ,to=10000, by=100) #no of trees-a vector of 100 values 
+
+#Generating a Prediction matrix for each Tree
+predmatrix<-predict(Boston.boost,Boston[-train,],n.trees = n.trees)
+dim(predmatrix) #dimentions of the Prediction Matrix
+
+#Calculating The Mean squared Test Error
+test.error<-with(Boston[-train,],apply( (predmatrix-medv)^2,2,mean))
+head(test.error) #contains the Mean squared test error for each of the 100 trees averaged
+
+#Plotting the test error vs number of trees
+
+plot(n.trees , test.error , pch=19,col="blue",xlab="Number of Trees",ylab="Test Error", main = "Perfomance of Boosting on Test Set")
+
+#adding the RandomForests Minimum Error line trained on same data and similar parameters
+abline(h = min(test.error),col="red") #test.err is the test error of a Random forest fitted on same data
+legend("topright",c("Minimum Test error Line for Random Forests"),col="red",lty=1,lwd=1)
+```
+
+In the above plot the red line represents the least error obtained from training a Random forest with same data and same parameters and number of trees.Boosting outperforms Random Forests on same test dataset with lesser Mean squared Test Errors.
+
+## Summary
+
+From the above plot we can notice that if boosting is done properly by selecting appropriate tuning parameters such as shrinkage parameter $\lambda$, the number of splits we want and the number of trees $n$, then it can generalize really well and convert a weak learner to strong learner. Ensembling techniques are really well and tend to outperform a single learner which is prone to either overfitting or underfitting or generate thousands or hundreds of them,then combine them to produce a better and stronger model.
+
+# Stochastic Gradient Boosting Using XGBOOST Package
+Stochastic gradient boosting involves resampling of observations and columns in each round
+
+```{r}
+library(tidyverse)  ## for easy data manipulation and visualization
+library(caret)      ## for easy machine learning workflow
+library(xgboost)    ## for computing boosting algorithm
+```
+
+Data set: **PimaIndiansDiabetes2** [in **mlbench** package], for predicting the probability of being diabetes positive based on multiple clinical variables.
+
+
+Randomly split the data into training set (80% for building a predictive model) and test set (20% for evaluating the model). Make sure to set seed for reproducibility.
+
+```{r}
+# Load the data and remove NAs
+data("PimaIndiansDiabetes2", package = "mlbench")
+PimaIndiansDiabetes2 <- na.omit(PimaIndiansDiabetes2)
+# Inspect the data
+sample_n(PimaIndiansDiabetes2, 3)
+# Split the data into training and test set
+set.seed(123)
+training.samples <- PimaIndiansDiabetes2$diabetes %>% 
+  createDataPartition(p = 0.8, list = FALSE)
+train.data  <- PimaIndiansDiabetes2[training.samples, ]
+test.data <- PimaIndiansDiabetes2[-training.samples, ]
+```
+
+We’ll use the **caret** workflow, which invokes the **xgboost** package, to automatically adjust the model parameter values, and fit the final best boosted tree that explains the best our data.
+We’ll use the following arguments in the function train(): trControl, to set up 10-fold cross validation
+
+
+```{r}
+# Fit the model on the training set
+set.seed(123)
+model <- train(
+  diabetes ~., data = train.data, method = "xgbTree",
+  trControl = trainControl("cv", number = 10)
+  )
+# Best tuning parameter
+model$bestTune
+
+# Make predictions on the test data
+predicted.classes <- model %>% predict(test.data)
+head(predicted.classes)
+
+# Compute model prediction accuracy rate
+mean(predicted.classes == test.data$diabetes)
+```
+
+The function **varImp()** [in caret] displays the importance of variables in percentage:
+```{r}
+varImp(model)
+
+```
+
+
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

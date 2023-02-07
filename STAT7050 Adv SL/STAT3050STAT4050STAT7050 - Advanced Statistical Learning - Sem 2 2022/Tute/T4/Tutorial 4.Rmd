@@ -1,0 +1,475 @@
+---
+title: "Tutorial 4- Local Regression & Kernel Regression"
+output:
+  html_document:
+    df_print: paged
+    number_sections: true
+---
+# Introduction
+## Simple Smoothers in R
+Local Averaging (Friedman’s “Super Smoother”):
+```
+supsmu(x, y, wt =, span = "cv", periodic = FALSE, bass = 0, trace = FALSE)
+```
+Local Regression (Cleveland’s LOESS):
+```
+loess(formula, data, weights, subset, na.action, model = FALSE,
+         span = 0.75, enp.target, degree = 2,
+         parametric = FALSE, drop.square = FALSE, normalize = TRUE,
+         family = c("gaussian", "symmetric"),
+         method = c("loess", "model.frame"),
+         control = loess.control(...), ...)
+```
+
+Kernel Regression (Nadaraya and Watson’s Kernel Smoother):
+```
+ksmooth(x, y, kernel = c("box", "normal"), bandwidth = 0.5,
+        range.x = range(x),
+        n.points = max(100L, length(x)), x.points)
+```
+## Need for NP Regression
+```{r}
+# Consider the dataset anscombe
+anscombe
+
+# Fit the linear regression model
+lm1 <- lm(y1 ~ x1, data = anscombe)
+lm2 <- lm(y2 ~ x2, data = anscombe)
+lm3 <- lm(y3 ~ x3, data = anscombe)
+lm4 <- lm(y4 ~ x4, data = anscombe)
+
+# print coefficients
+coef(lm1)
+
+# check R-squared values
+summary(lm1)$r.squared
+summary(lm2)$r.squared
+summary(lm3)$r.squared
+summary(lm4)$r.squared
+
+# plot results
+mods <- list(lm1, lm2, lm3, lm4)
+par(mfrow = c(2, 2), mar = c(5, 5, 4, 2) + 0.1)
+for(j in 1:4){
+  xseq <- seq(4, 15, length.out = 20) + ifelse(j == 4, 4, 0)
+  coefs <- coef(mods[[j]])
+  title <- substitute("Dataset " * jj * ":   " * hat(y) * " = 3 + 0.5" * italic(x),
+                      list(jj = j))
+  plot(xseq, coefs[1] + coefs[2] * xseq, type = "l", ylim = c(0, 15),
+     xlab = expression(italic(x)), ylab = expression(hat(italic(y))),
+     main = title, lwd = 2, col = "blue", cex.lab = 1.25, cex.main = 1.5)
+  text(6 + ifelse(j == 4, 4, 0), 13, expression(R^2 * " = 0.67"))
+}
+
+# plot results with data
+mods <- list(lm1, lm2, lm3, lm4)
+par(mfrow = c(2, 2), mar = c(5, 5, 4, 2) + 0.1)
+for(j in 1:4){
+  xseq <- seq(4, 15, length.out = 20) + ifelse(j == 4, 4, 0)
+  coefs <- coef(mods[[j]])
+  title <- substitute("Dataset " * jj * ":   " * hat(y) * " = 3 + 0.5" * italic(x),
+                      list(jj = j))
+  plot(xseq, coefs[1] + coefs[2] * xseq, type = "l", ylim = c(0, 15),
+     xlab = expression(italic(x)), ylab = expression(hat(italic(y))),
+     main = title, lwd = 2, col = "blue", cex.lab = 1.25, cex.main = 1.5)
+  points(anscombe[,c(j, j + 4)], pch = 19, col = "red")
+}
+```
+
+One can readily seen that parametric regression models may not reveal “true” relationships in data.
+
+## Interetsed Model
+Suppose we observe $n$ independent pairs of points $\{x_i,y_i\}_{i=1}^n$ with relationship $$y_i=f(x_i)+\epsilon_i,$$
+where $f(\cdot)$ is some unknown smooth function.
+
+# Local Averaging
+
+To estimate the unknown function $f(\cdot)$, Friedman (1984) proposed the simple and powerful idea of local averaging. The local averaging estimate of the function $f(\cdot)$ evaluated at the point $x$ is constructed by taking an average of the $y_i$ values corresponding to $x_i$ values that are nearby the given $x$.
+
+The local averaging estimate can be written as $$\hat{f}(x)=\frac{\sum_{i=1}^ny_iw_i(x)}{\sum_{i=1}^nw_i(x)},$$
+where the weights are defined such that $w_i(x)=1$ if the point $x_i$ is nearby the point $x$, and $w_i(x)=0$ otherwise.
+
+## How Close is Nearby?
+To formalize the concept of nearby, Friedman proposed using the smallest symmetric window around $x_i$ that contains $sn$ observations, where $s\in(0,1]$. The parameter $s$ is called the span parameter, which controls the smoothness of the function estimate. As $s\to 0$ the function estimate becomes less smooth, and as $s\to1$ the function estimate becomes more smooth. The goal is to find the value of $s$ that provides a “reasonable” estimate of the unknown smooth function $f(\cdot)$.
+
+## Simulation
+To get an understanding of the local averaging estimator, we will look at how the estimate is formed for the point $x^*=0.3$ using different values of the span parameter.
+
+
+```{r}
+# define function and data
+set.seed(1)
+n <- 101
+x <- seq(0, 1, length.out = n)
+fx <- sin(2 * pi * x)
+y <- fx + rnorm(n, sd = 0.5)
+
+# define x* and color for window
+xstar <- 0.3
+cols <- rgb(190/255, 190/255, 190/255, alpha = 0.5)
+
+# set-up 2 x 2 subplot
+par(mfrow = c(2,2))
+
+# loop through window length (0.1, 0.2, 0.3, 0.4)
+for(s in c(0.1, 0.2, 0.3, 0.4)){
+  
+  # plot data and true function
+  plot(x, y, main = paste0("window length = ", s), ylim = c(-2.5, 2.5),
+       cex.lab = 1.5, cex.axis = 1.25)
+  lines(x, fx, col = "blue", lwd = 2)
+  
+  # plot window
+  window <- c(xstar - s / 2, xstar + s / 2)
+  rect(window[1], -3, window[2], 3, col = cols)
+  
+  # define weights
+  w <- rep(0, n)
+  w[x >= window[1] & x <= window[2]] <- 1
+  
+  # plot estimate
+  ystar <- sum(y * w) / sum(w)
+  points(xstar, ystar, pch = 17, col = "red", cex = 1)
+  
+  # add legend
+  legend("topright", legend = c("data", "truth"),
+         pch = c(1, NA), lty = c(NA, 1), col = c("black", "blue"), bty = "n")
+  legend("bottomright", legend = c("estimate", "window"),
+         pch = c(17, 15), col = c("red", "gray"), bty = "n")
+  
+}
+
+
+
+```
+
+Note that the estimate (denoted by the red triangle) is calculated by averaging all of the $y_i$ values that are within the local window (denoted by the gray box). The above example shows the window for the point $x^*=0.3$, but the same idea applies to other points. To form the function estimate at a different $x$ value, we would just slide the averaging window down the x-axis to be centered at the new $x$ value.. As a result, the local averaging estimator is sometimes referred to as a “moving average” estimator.
+
+## Selecting the Span
+Typically the value of $s$ is determined using leave-one-out cross-validation, which can be done by the **supsmu** function.
+
+
+# Local Regression
+## Definition
+The local linear regression estimate is given by
+$$\hat{f}(x)=\hat{\beta}_0^{(x)}+\hat{\beta}_1^{(x)}x,$$
+where $\hat{\beta}_0^{(x)}$ and $\hat{\beta}_1^{(x)}$ are the minimizers of the weighted least squares problem
+$$\sum_{i=1}^n w_i(x) (y_i-\beta_0-\beta_1 x_i)^2 $$.
+
+A popular weight function is the tricube function
+$$w_i(x)=\begin{cases} (1-|x-x_i|^3)^3 & \textrm{if}~|x-x_i|<\delta_i\\
+0&\textrm{otherwise}
+\end{cases}$$
+where $\delta_i$ is some scalar that is used to determine which points are close enough to the given $x$ to receive a non-zero weight.
+
+The local polynomial regression estimate is given by
+$$\hat{f}(x)=\hat{\beta}_0^{(x)}+\hat{\beta}_1^{(x)}x+\hat{\beta}_2^{(x)}x^2,$$
+where $\hat{\beta}_0^{(x)}$, $\hat{\beta}_1^{(x)}$ and $\hat{\beta}_2^{(x)}$ are the minimizers of the weighted least squares problem
+$$\sum_{i=1}^n w_i(x) (y_i-\beta_0-\beta_1 x_i-\beta_2 x_i^2)^2 $$.
+
+
+```{r}
+# define tricube weight function
+tricube <- function(x, delta = 0.1) {
+  ifelse(abs(x) < delta, (1 - abs(x)^3)^3, 0)
+}
+
+# plot tricube weight function
+xstar <- 0.3
+plot(x, tricube(x - xstar, 0.1 / 2), t = "l", ylab = "W(x)",
+     cex.lab = 1.5, cex.axis = 1.25)
+deltas <- c(0.2, 0.3, 0.4)
+for(k in 1:3){
+  lines(x, tricube(x - xstar, deltas[k] / 2), lty = k + 1)
+}
+legend("topright", legend = c(expression(delta * " = 0.05"),
+                              expression(delta * " = 0.10"),
+                              expression(delta * " = 0.15"),
+                              expression(delta * " = 0.20")),
+       lty = 1:4, bty = "n")
+
+
+
+
+```
+
+
+## Simulation
+To get an understanding of the local regression estimator, we will look at how the estimate is formed for the point $x^*=0.3$ using different values of the span parameter.
+
+```{r}
+
+# Local Linear Regression
+
+
+# define function and data
+set.seed(1)
+n <- 101
+x <- seq(0, 1, length.out = n)
+fx <- sin(2 * pi * x)
+y <- fx + rnorm(n, sd = 0.5)
+
+# define x* and color for window
+xstar <- 0.3
+cols <- rgb(190/255,190/255,190/255,alpha=0.5)
+
+# set-up 2 x 2 subplot
+par(mfrow = c(2,2))
+
+# loop through window length (0.1, 0.2, 0.3, 0.4)
+for(s in c(0.1, 0.2, 0.3, 0.4)){
+  
+  # plot data and true function
+  plot(x, y, main = paste0("window length = ", s), ylim = c(-2.5, 2.5),
+       cex.lab = 1.5, cex.axis = 1.25)
+  lines(x, fx, col = "blue", lwd = 2)
+  
+  # plot window
+  window <- c(xstar - s / 2, xstar + s / 2)
+  rect(window[1], -3, window[2], 3, col = cols)
+  
+  # define weights
+  w <- tricube(x - xstar, delta = s / 2)
+  
+  # plot estimate
+  X.w <- sqrt(w) * cbind(1, x)
+  y.w <- sqrt(w) * y
+  beta <- solve(crossprod(X.w)) %*% crossprod(X.w, y.w)
+  ystar <- as.numeric(cbind(1, xstar) %*% beta)
+  points(xstar, ystar, pch = 17, col = "red", cex = 1)
+  
+  # add regression line
+  abline(beta, lty = 3)
+  
+  # add legend
+  legend("topright", legend = c("data", "truth"),
+         pch = c(1, NA), lty = c(NA, 1), col = c("black", "blue"), bty = "n")
+  legend("bottomright", legend = c("estimate", "window"),
+         pch = c(17, 15), col = c("red", "gray"), bty = "n")
+  
+}
+
+
+# Local Quadratic Regression
+
+# define function and data
+set.seed(1)
+n <- 101
+x <- seq(0, 1, length.out = n)
+fx <- sin(2 * pi * x)
+y <- fx + rnorm(n, sd = 0.5)
+
+# define x* and color for window
+xstar <- 0.3
+cols <- rgb(190/255,190/255,190/255,alpha=0.5)
+
+# set-up 2 x 2 subplot
+par(mfrow = c(2,2))
+
+# loop through spans (0.1, 0.2, 0.3, 0.4)
+for(s in c(0.1, 0.2, 0.3, 0.4)){
+  
+  # plot data and true function
+  plot(x, y, main = paste0("span = ", s), ylim = c(-2.5, 2.5),
+       cex.lab = 1.5, cex.axis = 1.25)
+  lines(x, fx, col = "blue", lwd = 2)
+  
+  # plot window
+  window <- c(xstar - s / 2, xstar + s / 2)
+  rect(window[1], -3, window[2], 3, col = cols)
+  
+  # define weights
+  w <- tricube(x - xstar, delta = s / 2)
+  
+  # plot estimate
+  X <- cbind(1, x - 0.5, (x - 0.5)^2)
+  X.w <- sqrt(w) * X
+  y.w <- sqrt(w) * y
+  beta <- solve(crossprod(X.w)) %*% crossprod(X.w, y.w)
+  ystar <- as.numeric(cbind(1, xstar - 0.5, (xstar - 0.5)^2) %*% beta)
+  points(xstar, ystar, pch = 17, col = "red", cex = 1)
+  
+  # add regression line
+  lines(x, X %*% beta, lty = 3)
+  
+  # add legend
+  legend("topright", legend = c("data", "truth"),
+         pch = c(1, NA), lty = c(NA, 1), col = c("black", "blue"), bty = "n")
+  legend("bottomright", legend = c("estimate", "window"),
+         pch = c(17, 15), col = c("red", "gray"), bty = "n")
+  
+}
+
+
+```
+
+## Selecting the Span
+The **loess** function does not offer any data-driven method for selecting the span parameter. We can use LOOCV or GCV to select the span parameter.
+
+The below function offers a simple implementation of the **loess** function that uses the GCV to tune the span parameter.
+```{r}
+loess.gcv <- function(x, y){
+  nobs <- length(y)
+  xs <- sort(x, index.return = TRUE)
+  x <- xs$x
+  y <- y[xs$ix]
+  tune.loess <- function(s){
+    lo <- loess(y ~ x, span = s)
+    mean((lo$fitted - y)^2) / (1 - lo$trace.hat/nobs)^2
+  }
+  os <- optimize(tune.loess, interval = c(.01, 99))$minimum
+  lo <- loess(y ~ x, span = os)
+  list(x = x, y = lo$fitted, df = lo$trace.hat, span = os)
+}
+
+
+```
+
+# Kernel Regression
+$$\hat{f}(x)=\sum_{i=1}^ny_iw_i(x),$$
+where 
+$$w_i(x)=\frac{K([x-x_i]/h)}{\sum_{i=1}^n K([x-x_i]/h)},$$
+with $K(\cdot)$ denoting some known kernel function (typically the Gaussian kernel), and $h>0$ denoting the bandwidth parameter. Note that the bandwidth parameter controls how much information from nearby $(x_i,y_i)$ points is used to estimate the function $f(\cdot)$ at the point $x$.
+
+```{r}
+# plot Gaussian kernel function
+xstar <- 0.3
+plot(x, dnorm((x - xstar) / (1 / 60)), 
+     t = "l", ylab = "K([x - 0.3] / h)", cex.lab = 1.5, 
+     cex.axis = 1.25, ylim = c(0, 0.4))
+for(k in 2:4){
+  lines(x, dnorm((x - xstar) / (k / 60)) , lty = k)
+}
+legend("topright", legend = c("h = 1/60", "h = 2/60", "h = 3/60", "h = 4/60"),
+       lty = 1:4, bty = "n")
+
+
+
+```
+
+
+## Simulation
+To get an understanding of the kernel regression estimator, we will look at how the estimate is formed for the point $x^*=0.3$ using different values of the bandwidth parameter.
+
+```{r}
+# define function and data
+set.seed(1)
+n <- 101
+x <- seq(0, 1, length.out = n)
+fx <- sin(2 * pi * x)
+y <- fx + rnorm(n, sd = 0.5)
+
+# define x* and color for window
+xstar <- 0.3
+cols <- rgb(190/255, 190/255, 190/255, alpha = 0.5)
+
+# set-up 2 x 2 subplot
+par(mfrow = c(2,2))
+
+# loop through h = c(1, 2, 3, 4) / 60
+for(h in c(1:4)/60){
+  
+  # plot data and true function
+  plot(x, y, main = paste0("h = ", h * 60, "/60"), ylim = c(-2.5, 2.5),
+       cex.lab = 1.5, cex.axis = 1.25)
+  lines(x, fx, col = "blue", lwd = 2)
+  
+  # plot 99% window
+  window <- c(xstar - 3 * h, xstar + 3 * h)
+  rect(window[1], -3, window[2], 3, col = cols)
+  
+  # define weights
+  w <- dnorm((x - xstar) / h) 
+  w <- w / sum(w)
+  
+  # plot estimate
+  ystar <- sum(y * w)
+  points(xstar, ystar, pch = 17, col = "red", cex = 1)
+  
+  # add legend
+  legend("topright", legend = c("data", "truth"),
+         pch = c(1, NA), lty = c(NA, 1), col = c("black", "blue"), bty = "n")
+  legend("bottomright", legend = c("estimate", "99% area"),
+         pch = c(17, 15), col = c("red", "gray"), bty = "n")
+  
+}
+
+
+```
+
+## Selecting the Bandwidth
+Similar to the **loess** function, the **ksmooth** function does not offer any data-driven method for selecting the bandwidth parameter.
+
+The below function offers a simple implementation of the **ksmooth function** (with Gaussian kernel) that uses the GCV to tune the bandwidth parameter. 
+```{r}
+ksmooth.gcv <- function(x, y){
+  nobs <- length(y)
+  xs <- sort(x, index.return = TRUE)
+  x <- xs$x
+  y <- y[xs$ix]
+  xdif <- outer(x, x, FUN = "-")
+  tune.ksmooth <- function(h){
+    xden <- dnorm(xdif / h)
+    xden <- xden / rowSums(xden)
+    df <- sum(diag(xden))
+    fit <- xden %*% y
+    mean((fit - y)^2) / (1 - df/nobs)^2
+  }
+  xrng <- diff(range(x))
+  oh <- optimize(tune.ksmooth, interval = c(xrng/nobs, xrng))$minimum
+  if(any(oh == c(xrng/nobs, xrng)))
+    warning("Minimum found on boundary of search range.\nYou should retune model with expanded range.")
+  xden <- dnorm(xdif / oh)
+  xden <- xden / rowSums(xden)
+  df <- sum(diag(xden))
+  fit <- xden %*% y
+  list(x = x, y = fit, df = df, h = oh)
+}
+
+
+```
+
+# Real-world Data Analysis
+```{r}
+# Example: Prestige from Income
+
+# The Prestige dataset (from the car package) contains the prestige of n=102 Canadian occupations from 1971, as well as the average income of the occupation. We will use the nonparametric regression methods to explore the relationship between prestige and income.
+
+# load data
+library(car)
+
+data(Prestige)
+head(Prestige)
+
+# plot data
+plot(Prestige$income, Prestige$prestige, 
+     xlab = "Income", ylab = "Prestige")
+
+# local averaging (cv span selection)
+locavg <- with(Prestige, supsmu(income, prestige))
+
+# local regression (gcv span selection)
+locreg <- with(Prestige, loess.gcv(income, prestige))
+locreg$df
+
+# kernel regression (gcv span selection)
+kern <- with(Prestige, ksmooth.gcv(income, prestige))
+kern$df
+
+# plot data
+plot(Prestige$income, Prestige$prestige, xlab = "Income", ylab = "Prestige")
+
+# add fit lines
+lines(locavg, lwd = 2)
+lines(locreg, lwd = 2, lty = 2, col = "red")
+lines(kern, lwd = 2, lty = 3, col = "blue")
+
+# add legend
+legend("bottomright", c("supsmu", "loess", "ksmooth"),
+       lty = 1:3, lwd = 2, col = c("black", "red", "blue"), bty = "n")
+
+```
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

@@ -1,0 +1,151 @@
+---
+title: "R Notebook on Neural Network"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# Recap
+![](neuron.png)
+
+$$ y=f(\sum_{i=1}^n w_ix_i+b), $$
+where $x_1,\cdots,x_n$ are input variables, $w_1,\cdots,w_n$ are weights of the inputs, $b$ is the bias, which is summed with the weighted inputs to form the net inputs. Bias and weights are both adjustable parameters of the neuron. Parameters are adjusted using some learning rules. $f$ is an activation function which maps inputs to output.
+
+![](layers.png){width=100%}
+
+A network may have three types of layers: input layers that take raw input from the domain, hidden layers that take input from another layer and pass output to another layer, and output layers that make a prediction. All hidden layers typically use the same activation function. The output layer will typically use a different activation function from the hidden layers and is dependent upon the type of prediction required by the model.
+
+Activation for Hidden Layers (depend on the structure of NN): ReLU, Sigmoid, Tanh.
+
+Activation for Output Layers (depend on the type of response): Linear, Sigmoid, Softmax.
+
+![](hidden function.png)
+![](output function.png)
+
+
+# Load Library
+
+```{r}
+library(keras)
+library(mlbench)
+library(dplyr)
+library(magrittr)
+library(neuralnet)
+```
+
+# Getting Data
+
+
+```{r}
+data("BostonHousing")
+datah <- BostonHousing
+str(datah)
+```
+In this data set contains 506 observations and 14 variables. The variables **chas** as a factor variable, we need to convert in into numerical variable because neural network handles only numerical data.
+
+**Medv** is the response variable, and the remaining are the predictors.
+
+
+We need to convert factor variables into numeric variables while applying neural network estimation. This function automatically detects the factor variables and convert them into numerical variables.
+
+```{r}
+datah %<>% mutate_if(is.factor, as.numeric)
+dim(datah)
+```
+
+# Neural Network in R Visualization
+
+In the model creation we need to mention the hidden layers, in this case we use 12 neurons in the first layer and 7 neurons in the second layer.
+
+```{r}
+n <- neuralnet(medv ~ crim+zn+indus+chas+nox+rm+age+dis+rad+tax+ptratio+b+lstat,
+               data = datah,
+               hidden = c(12,7),
+               linear.output = F,
+               lifesign = 'full',
+               rep=1)
+```
+
+```{r}
+# Plot the model visual identification
+plot(n,col.hidden = 'darkgreen',     
+    col.hidden.synapse = 'darkgreen',
+     show.weights = F,
+     information = F,
+     fill = 'lightblue')
+
+
+
+```
+![](net1.png){width=100%}
+
+
+
+Now we can see each predictor variable has one neuron, the first layer has 12 neurons, the second layer has 7 neurons and the out variable has one neuron.
+
+
+
+
+
+
+
+
+# Another Example
+
+```{r}
+# creating training data set
+# predictors: the technical knowledge (TKS) and communication skills score (CSS)
+# response variable: placement status of the student (Placed) which is a binary variable
+TKS=c(20,10,30,20,80,30)
+CSS=c(90,20,40,50,50,80)
+Placed=c(1,0,0,0,1,1)
+# combine multiple columns into a single set of data
+df=data.frame(TKS,CSS,Placed)
+# load library
+require(neuralnet)
+# fit neural network
+nn=neuralnet(Placed~TKS+CSS,data=df, hidden=3,act.fct = "logistic",
+                linear.output = FALSE)
+# Placed~TKS+CSS, Placed is label annd TKS and CSS are features.
+# df is dataframe,
+# hidden=3: represents single layer with 3 neurons respectively.
+# act.fct = "logistic" used for smoothing the result.
+# linear.ouput=FALSE: set FALSE for apply act.fct otherwise TRUE
+
+# plot neural network
+plot(nn)
+
+# creating test set
+TKS=c(30,40,85)
+CSS=c(85,50,40)
+test=data.frame(TKS,CSS)
+
+## Prediction using neural network
+Predict=neuralnet::compute(nn,test)
+Predict$net.result
+
+# Converting probabilities into binary classes setting threshold level 0.5
+prob <- Predict$net.result
+pred <- ifelse(prob>0.5, 1, 0)
+pred
+
+
+```
+![](net2.png){width=100%}
+
+# SVM, FDA, PDA
+SVM: function **svm** in **e1071** package. Can use **tune** function in **e1071** package to select the hyperparameters.
+
+FDA: function **fda** in **mad** package. Reference: Flexible Discriminant Analysis by Optimal Scoring
+
+PDA: **penalizedLDA** package. Can use **PenalizedLDA.cv** to select the hyperparameters.
+
+
+
+
+

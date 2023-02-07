@@ -1,0 +1,206 @@
+---
+title: "R Notebook on KPCA and Spectral Clustering"
+output:
+  html_document:
+    df_print: paged
+---
+# Kernel PCA
+In the Machine Learning problems the feature extraction procedure is very often required. Even if features are extracted already, e.g. by somebody who gave you the data, they may be weak for a prediction problem that you need to solve. But those features can be combined and new features can be derived. Let us consider a binary classification problem in $\mathbb{R}^2$ with features $x_1$ and $x_2$:
+![](pca1.png)
+It can be easily seen that the problem is not solvable by any linear classifier such as SVM or logistic regression. Let us try to think, what we can do with this problem. The feature engineering process can be very sophisticated and quite tricky, so in the presented case if we will introduce new feature $x_1^2+x_2^2$ and extend our space of features we will get the following picture:
+
+![](pca2.png)
+
+We can use a linear classifier in the new space of features.
+
+
+
+
+
+
+```{r}
+
+library(kernlab)
+data(iris)
+
+# For KernelPCA ,it is better to do feature scaling (normalization)
+
+test <- sample(1:150,20)
+
+kpc <- kpca(~.,data=iris[-test,-5],kernel="rbfdot",
+            kpar=list(sigma=0.2),features=2)      
+```
+
+**kpca** function:
+
+kernel: 'rbfdot'  Radial Basis kernel function "Gaussian"
+
+kpar: the list of hyper-parameters (kernel parameters). This is a list which contains the parameters to be used with the kernel function.
+
+* 'sigma': inverse kernel width for the Radial Basis kernel function "rbfdot" 
+
+features: Number of features (principal components) to return. (default: 0 , all)
+
+```{r}
+#print the principal component vectors
+pcv(kpc)
+
+#plot the data projection on the components
+plot(rotated(kpc),col=as.integer(iris[-test,5]),
+     xlab="1st Principal Component",ylab="2nd Principal Component")
+
+#embed remaining points 
+emb <- predict(kpc,iris[test,-5])
+points(emb,col=as.integer(iris[test,5]))
+```
+
+
+# Spectral Clustering
+The goal of spectral clustering is to cluster data that is connected but not necessarily clustered within convex boundaries.
+
+Let’s get a dataset nasty for standard clustering:
+```{r}
+# install.packages("mlbench")
+library(mlbench)
+
+set.seed(111)
+obj <- mlbench.spirals(100,1,0.025)
+my.data <-  4 * obj$x
+plot(my.data)
+
+library(kernlab)
+
+sc <- specc(my.data, centers=2)
+plot(my.data, col=sc, pch=4)            # estimated classes (x)
+points(my.data, col=obj$classes, pch=5) # true classes (<>)
+```
+
+Spectral clustering needs a similarity or affinity $s(x,y)$ measure determining how close points $x$ and $y$ are from each other.
+
+Let’s denote the Similarity Matrix, $S$, as the matrix that at $S_{ij}=s(x_i,x_j)$ gives the similarity between observations $x_i$ and $x_j$.
+
+Common similary measures are:
+
+* Euclidean distance: $s(x_i,x_j)=-\| x_i-x_j \|^2$
+* Gaussian kernel: $s(x_i,x_j)=\exp (-\alpha\|x_i-x_j\|^2)$
+
+In the Gaussian Kernel if two points are close then $S_{ij}\approx 1$ and when two points are far apart then $S_{ij}\approx 0$. This measure can also have a hard cut at a certain distance $r$, i.e. $\| x_i-x_j \|^2\geq r\implies S_{ij}=0$
+
+We expect that when two points are from different clusters they are far away. But it might also happen that two points from the same cluster are also far away, except that there should be a sequence of points from the same cluster creating a “path” between them.
+
+Let’s compute S for this dataset using the gaussian kernel:
+
+```{r}
+# The procedure of Spectral Clustering can also be written by ourselves.
+
+# Computation of the Similarity Matrix S
+
+
+s <- function(x1, x2, alpha=1) {
+  exp(- alpha * norm(as.matrix(x1-x2), type="F"))
+}
+
+make.similarity <- function(my.data, similarity) {
+  N <- nrow(my.data)
+  S <- matrix(rep(NA,N^2), ncol=N)
+  for(i in 1:N) {
+    for(j in 1:N) {
+      S[i,j] <- similarity(my.data[i,], my.data[j,])
+    }
+  }
+  S
+}
+
+S <- make.similarity(my.data, s)
+S[1:8,1:8]
+```
+
+The next step is to compute an affinity matrix $A$ based on $S$. $A$ must be made of positive values and be symmetric.
+
+This is usually done by applying a $k$-nearest neighbor filter to build a representation of a graph connecting just the closest dataset points. However, to be symmetric, if $A_{ij}$ is selected as a nearest neighbor, so will $A_{ji}$.
+
+Let's compute one:
+
+```{r}
+make.affinity <- function(S, n.neighboors=2) {
+  N <- length(S[,1])
+
+  if (n.neighboors >= N) {  # fully connected
+    A <- S
+  } else {
+    A <- matrix(rep(0,N^2), ncol=N)
+    for(i in 1:N) { # for each line
+      # only connect to those points with larger similarity 
+      best.similarities <- sort(S[i,], decreasing=TRUE)[1:n.neighboors]
+      for (s in best.similarities) {
+        j <- which(S[i,] == s)
+        A[i,j] <- S[i,j]
+        A[j,i] <- S[i,j] # to make an undirected graph, ie, the matrix becomes symmetric
+      }
+    }
+  }
+  A  
+}
+
+A <- make.affinity(S, 3)  # use 3 neighboors (includes self)
+A[1:8,1:8]
+```
+
+With this affinity matrix, clustering is replaced by a graph-partition problem, where connected graph components are interpreted as clusters. The graph must be partitioned such that edges connecting different clusters should have low weights, and edges within the same cluster must have high values. Spectral clustering tries to construct this type of graph.
+
+There is the need of a degree matrix $D$ where each diagonal value is the degree of the respective vertex and all other positions are zero:
+
+```{r}
+# Computation of the diagonal matrix D
+D <- diag(apply(A, 1, sum)) # sum rows
+D[1:8,1:8]
+```
+
+Next we compute the unnormalized graph Laplacian ($U=D−A$). 
+
+
+```{r}
+U <- D - A
+round(U[1:12,1:12],1)
+```
+
+Assuming we want $k$ clusters, the next step is to find the $k$ smallest eigenvectors (ignoring the trivial constant eigenvector).
+
+```{r}
+k   <- 2
+evL <- eigen(U, symmetric=TRUE)
+Z   <- evL$vectors[,(ncol(evL$vectors)-k+1):ncol(evL$vectors)]
+```
+The $i$-th row of $Z$ defines a transformation for observation $x_i$. Let's check that they are well-separated:
+
+```{r}
+plot(Z, col=obj$classes, pch=20) # notice that all 50 points, of each cluster, are on top of each other
+
+# In this transformed space it becomes easy for a standard k-means clustering to find the appropriate clusters:
+
+library(stats)
+km <- kmeans(Z, centers=k, nstart=5)
+plot(my.data, col=km$cluster)
+
+# If we don’t know how much clusters there are, the eigenvalue spectrum has a gap that give us the value of k.
+
+signif(evL$values,2) # eigenvalues are in decreasing order
+plot(1:10, rev(evL$values)[1:10], log="y")
+abline(v=2.25, col="red", lty=2) # there are just 2 clusters as expected
+
+## This gap usually is hard to find. Choosing the optimal k is called rounding.
+
+```
+
+
+Using R **kernlab** package
+
+```{r}
+library(kernlab)
+
+sc <- specc(my.data, centers=2)
+plot(my.data, col=sc, pch=4)            # estimated classes (x)
+points(my.data, col=obj$classes, pch=5) # true classes (<>)
+```
+
+

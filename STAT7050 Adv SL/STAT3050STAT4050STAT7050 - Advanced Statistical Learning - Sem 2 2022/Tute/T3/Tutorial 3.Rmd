@@ -1,0 +1,258 @@
+---
+title: "Tutorial 3"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+## Recap
+Model: $$\mathbb{E}(Y|X)=f(X)=\sum_{m=1}^M \beta_mh_m(X),$$
+where $h_m(X)$ are basis functions.
+
+Control of flexibility/complexity:
+
+* restriction methods: i.e. additivity
+* selection methods: i.e. CART, MARS and boosting
+* regularization methods: i.e. ridge regression
+
+
+Piecewise polynomials:
+![](1.png)
+![](2.png)
+
+
+Smoothing spline:
+
+* objective function $$\textrm{RSS}(f,\lambda)=\sum_{i=1}^n (y_i-f(x_i))^2+\lambda\int (f^{\prime\prime}(t))^2dt$$
+
+
+## Smoothing Spline
+Smoothing splines are a powerful approach for estimating functional relationships between a predictor X and a response Y. Smoothing splines can be fit using either the **smooth.spline** function (in the stats package) or the **ss** function (in the npreg package). 
+
+#### smooth.spline Function (stats package)
+Syntax:
+```
+smooth.spline(x, y = NULL, w = NULL, df, spar = NULL, lambda = NULL,
+                          cv = FALSE, all.knots = FALSE, 
+                          nknots = .nknots.smspl, keep.data = TRUE, 
+                          df.offset = 0, penalty = 1, control.spar = list(),
+                          tol = 1e-6 * IQR(x), keep.stuff = FALSE)
+```
+
+#### ss Function (npreg Package)
+Syntax:
+```
+ss(x, y = NULL, w = NULL, df, spar = NULL, lambda = NULL,
+      method = c("GCV", "OCV", "GACV", "ACV", "REML", "ML", "AIC", "BIC"),
+      m = 2L, periodic = FALSE, all.knots = FALSE, nknots = .nknots.smspl,
+      knots = NULL, keep.data = TRUE, df.offset = 0, penalty = 1,
+      control.spar = list(), tol = 1e-6 * IQR(x), bernoulli = TRUE)
+```
+#### Comparison of Approaches
+Compared to the **smooth.spline** function, the **ss** function has
+
+(1) more smoothing parameter selection methods
+
+(2) more spline types (linear, cubic, quintic)
+
+(3) an option for periodicity constraints
+
+(4) an option for user-specified knot values
+
+(5) corresponding summary and plot methods
+
+```{r}
+# To see how these functions perform in practice, let’s look at a simulated example. Specifically, let’s simulate some data with a (periodic) functional relationship that has some noise.
+
+# define function
+n <- 101
+x <- seq(0, 1, length.out = n)
+fx <- sin(2 * pi * x)
+
+# generate noisy data
+set.seed(1)
+y <- fx + rnorm(n, sd = 0.5)
+
+# plot data and f(x)
+plot(x, y)             # data
+lines(x, fx, lwd = 2)  # f(x)
+legend("topright", legend = "f(x)", lty = 1, lwd = 2, bty = "n")
+
+#Estimate function using smooth.spline and ss functions with 10 knots:
+# load 'npreg' package
+library(npreg)
+
+# fit using ss
+mod.ss <- ss(x, y, nknots = 10)
+mod.ss
+```
+
+```{r}
+# fit using smooth.spline
+mod.smsp <- smooth.spline(x, y, nknots = 10)
+mod.smsp
+
+#Note that the two functions produce objects that contain (nearly) identical results:
+# compare returned objects
+names(mod.ss)
+names(mod.smsp)
+# rmse between solutions
+sqrt(mean(( mod.ss$y - mod.smsp$y )^2))
+# rmse between solutions and f(x)
+sqrt(mean(( fx - mod.ss$y )^2))
+sqrt(mean(( fx - mod.smsp$y )^2))
+
+# plot results
+plot(x, y)
+lines(x, fx, lwd = 2)
+lines(x, mod.ss$y, lty = 2, col = 2, lwd = 2)
+lines(x, mod.smsp$y, lty = 3, col = 3, lwd = 2)
+legend("topright", 
+       legend = c("f(x)", "ss", "smooth.spline"), 
+       lty = 1:3, col = 1:3, lwd = 2, bty = "n")
+```
+
+
+Some extra features of the ss function include the “plot” and “summary” methods:
+```{r}
+# plot method
+plot(mod.ss)
+
+# summary method
+mod.sum <- summary(mod.ss)
+mod.sum
+```
+Note that the summary function produces a printout that resembles what one would see from the **lm** or **glm** function
+
+#### Smoothing Parameter Influence
+$$f_\lambda=\min_f \textrm{RSS}(f,\lambda),$$
+where
+$$\textrm{RSS}(f,\lambda)=\sum_{i=1}^n (y_i-f(x_i))^2+\lambda\int (f^{\prime\prime}(t))^2dt$$
+
+As $\lambda\to 0$ the penalty has less influence on the penalized least squares functional So, for very small values of $\lambda$, the function estimate $f_\lambda$ essentially minimizes the residual sum of squares.
+
+As $\lambda\to\infty$ the penalty has more influence the penalized least squares functional So, for very large values of $\lambda$, the function estimate $f_\lambda$ is essentially constrained to have a zero penalty.
+
+As $\lambda$ increases from $0$ to $\infty$, the function estimate $f_\lambda$ is forced to be smoother with respect to the penalty functional. The goal is to find the $\lambda$ that produces the “correct” degree of smoothness for the function estimate.
+
+```{r}
+
+# subplots (1 x 3)
+par(mfrow = c(1,3))
+
+# lambda = 1e-15 (df = n)
+mod.ss0 <- ss(x, y, all.knots = TRUE, lambda = 1e-15)
+plot(mod.ss0, ylim = c(-1.75, 1.75))
+points(x, y)
+
+# GCV selection
+mod.ss <- ss(x, y, all.knots = TRUE)
+plot(mod.ss, ylim = c(-1.75, 1.75))
+points(x, y)
+
+# lambda = 100 (df = m)
+mod.ss10 <- ss(x, y, all.knots = TRUE, lambda = 100)
+plot(mod.ss10, ylim = c(-1.75, 1.75))
+points(x, y)
+```
+
+#### Penalty Order Influence
+
+Setting $m=2$ produces a cubic smoothing spline, which penalizes the squared second derivative of the function. Cubic smoothing splines are the default in many software. Cubic smoothing splines estimate $f(\cdot)$ using piecewise cubic functions, which are connected at knots. The function estimates have two continuous derivatives at the knots, ensuring a smooth estimate of the function and its derivatives. 
+
+Setting $m=1$ results in a linear smoothing spline (a piecewise linear function), and setting $m=3$ produces a quintic smoothing spline (a piecewise quintic function).
+
+```{r}
+
+mod.lin <- ss(x, y, nknots = 10, m = 1)
+mod.cub <- ss(x, y, nknots = 10) ## m=2 by default
+mod.qui <- ss(x, y, nknots = 10, m = 3)
+par(mfrow = c(1,3))
+plot(mod.lin, ylim = c(-1.75, 1.75))
+points(x, y)
+plot(mod.cub, ylim = c(-1.75, 1.75))
+points(x, y)
+plot(mod.qui, ylim = c(-1.75, 1.75))
+points(x, y)
+```
+
+#### Example 1: Prestige from Income
+
+```{r}
+library(car)
+#The Prestige dataset (from the car package) contains the prestige of n=102 Canadian occupations from 1971, as well as the average income of the occupation. We will use a smoothing spline to explore the relationship between prestige and income.
+
+#First, let’s load the data and visualize the relationship between income (X) and prestige (Y).
+data(Prestige)
+head(Prestige)
+# plot data
+plot(Prestige$income, Prestige$prestige, 
+     xlab = "Income", ylab = "Prestige")
+
+# fit model
+mod.ss <- with(Prestige, ss(income, prestige))
+mod.ss
+
+# summarize fit
+summary(mod.ss)
+
+# plot fit
+# The gray shaded area denotes a 95% Bayesian “confidence interval” for the unknown function.
+plot(mod.ss, xlab = "Income", ylab = "Prestige")
+rug(Prestige$income)  # add rug to plot
+
+#Compare to lm fit:
+
+# plot ss fit
+plot(mod.ss, xlab = "Income", ylab = "Prestige")
+
+# add lm fit
+abline(coef(lm(prestige ~ income, data = Prestige)), lty = 2)
+
+# add data and legend
+with(Prestige, points(income, prestige))
+legend("bottomright", legend = c("ss", "lm"), lty = 1:2, bty = "n")
+
+
+```
+
+#### Example 2: Motorcycle Accident
+
+```{r}
+# Example 2
+
+#The mcycle dataset (from the MASS package) contains n=133 pairs of time points (in ms) and observed head accelerations (in g) that were recorded in a simulated motorcycle accident. We will use a smoothing spline to explore the relationship between time and acceleration.
+
+#First, let’s load the data and visualize the relationship between time (X) and acceleration (Y).
+
+# load data
+library(MASS)
+data(mcycle)
+head(mcycle)
+
+# plot data
+plot(mcycle$times, mcycle$accel, 
+     xlab = "Time (ms)", ylab = "Acceleration (g)")
+
+# fit model
+mod.ss <- with(mcycle, ss(times, accel))
+mod.ss
+
+# summarize fit
+summary(mod.ss)
+
+# plot fit
+# The gray shaded area denotes a 95% Bayesian “confidence interval” for the unknown function.
+plot(mod.ss, xlab = "Time (ms)", ylab = "Acceleration (g)")
+rug(mcycle$times)  # add rug to plot
+```
+
+
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

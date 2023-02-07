@@ -1,0 +1,117 @@
+---
+title: "R Notebook: Gibbs Sampling and GAM"
+output:
+  html_document:
+    df_print: paged
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+# MCMC for Bayesian Inference
+## Recap
+Posterior predictive distribution:
+$$\textrm{Pr} (z^{\textrm{new}}|\boldsymbol{Z})=\int \textrm{Pr} (z^{\textrm{new}}|\theta) \textrm{Pr} (\theta|\boldsymbol{Z}) d\theta$$
+
+Monte Carlo method:
+$$\int \textrm{Pr} (z^{\textrm{new}}|\theta) \textrm{Pr} (\theta|\boldsymbol{Z}) d\theta	\simeq \frac{1}{n} \sum_{i=1}^n \textrm{Pr} (z^{\textrm{new}}|\theta^{(i)}),$$
+where $\theta^{(i)}$ are samples from the posterior $\textrm{Pr} (\theta|\boldsymbol{Z})$.
+
+MCMC (Gibbs sampling):
+
+The Gibbs sampler draws iteratively from posterior conditional distributions rather than drawing directly from the joint posterior distribution. This makes the Gibbs Sampler particularly useful, as the joint posterior is not always easy to work with.
+
+## Gibbs Sampling
+The Gibbs sampler works by restructuring the joint estimation problem as a series of smaller, easier estimation problems. To illustrate, let $\theta_1$ and $\theta_2$ be bivariate normally distributed random variables with population mean zero ($\mu_1 = \mu_2 = 0$), unit variance ($\sigma_1^2 = \sigma_2^2 = 1$), and correlation $\rho$.
+
+The Gibbs sampler makes it so that if we sample repeatedly from two conditional distributions. Then these will be samples from the joint distribution $p(\theta_1, \theta_2)$ and its marginals.
+
+```{r}
+
+sample_bivariate_normal <- function(rho, nr_samples) {
+  theta <- matrix(0, nrow = nr_samples, ncol = 2)
+  
+  for (i in seq(2, nr_samples)) {
+    theta[i, 1] <- rnorm(1, rho*theta[i-1, 2], sqrt(1 - rho^2))  # sample from p(theta1 | theta2)
+    theta[i, 2] <- rnorm(1, rho*theta[i, 1]  , sqrt(1 - rho^2))  # sample from p(theta2 | theta1)
+  }
+  
+  theta
+}
+
+set.seed(1)
+samples <- sample_bivariate_normal(rho = 0.5, nr_samples = 10000)
+cov(samples)
+plot(samples,main="Gibbs-Sampled Gaussian Data",xlab="theta1", ylab = "theta2")
+```
+
+# Generalized Additive Model in R
+GAM:
+$$\textrm{E}(Y|X_1,\cdots,X_p)=\alpha_1+f_1(X_1)+\cdots+f_p(X_p).$$
+
+We study the relationship between atmospheric ozone concentration ($O_3$) and other meteorological variables in the Los Angeles Basin in 1976. To simplify matters, let us only focus on three predictors: temperature measured at El Monte (temp), inversion base height at LAX (ibh), and inversion top temperature at LAX (ibt). 
+```{r}
+
+# Fit a linear regression model first. 
+
+library(faraway)
+data(ozone)
+olm=lm(O3~temp+ibh+ibt, ozone)
+summary(olm)
+```
+Note that ibt is not significant in this model. One task among others in a regression analysis is to find the right transformation on the predictors. Additive models can help here. 
+
+Now we fit an additive model using the Gaussian response as the default. We use the loess smoother by specifying lo in the model formula for all three predictors. 
+
+```{r}
+library(gam)
+amgam=gam(O3~lo(temp)+lo(ibh)+lo(ibt), data=ozone)
+summary(amgam)
+```
+
+Compared to the linear model, the $R^2$ of GAM is improved by more than 10%. However, the **loess** fit does use more degrees of freedom (i.e. the effective number of parameters is estimated by the trace of the projection matrix). The **gam** package uses a score test for testing the significance for each predictor. But the p-values are only approximate at best and should be viewed with some skepticism. It is generally better to fit the model without the predictor of interest and then construct the F-test. 
+
+```{r}
+amgamr=gam(O3~lo(temp)+lo(ibh), data = ozone)
+anova(amgamr, amgam, test="F")
+```
+
+Although the p-value from F-test is still an approximation, we can see some evidence that ibt is not significant. Let us examine the fit for all three variables. 
+
+```{r}
+par(mfrow=c(1,3), mar=c(5,5,2,2), cex.lab=3, cex.axis=2)
+plot(amgam, residuals=TRUE, se=TRUE, pch=".")
+```
+
+For the **ibt**, the confidence band can hold a constant function, which reinforces the conclusion that it is not significant. For variable **temp**, it is clear that an "elbow" around 60 degree, while for **ibh**, it reaches maximum around 1000. 
+
+Another method of fitting GAM is **mgcv** package. Although splines are the only choice of smoother in the **mgcv** package, it has an automatic choice in the amount of smoothing as well as wider functionality. 
+
+```{r}
+library(mgcv)
+ammgcv=gam(O3~s(temp)+s(ibh)+s(ibt), data=ozone)
+summary(ammgcv)
+par(mfrow=c(1,3), mar=c(5,5,2,2), cex.lab=3, cex.axis=2)
+plot(ammgcv)
+```
+
+We see that the $R^2$ is about the same as the **gam** fit. We can also examine the transformation used for each variable. We can see that the fitted transformations are again similar to **gam** fit. Variable **ibt** does not appear to be significant.
+
+We can also test whether there is a nonlinear trend for variables temp by fitting a model with a linear term of **temp** and then make the F-test. The test result confirms that there is really a change in the trend of temperature. 
+
+```{r}
+am1=gam(O3~s(temp)+s(ibh),data=ozone)
+am2=gam(O3~temp+s(ibh),data=ozone)
+anova(am2,am1,test="F")
+
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

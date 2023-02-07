@@ -1,0 +1,87 @@
+---
+title: "R Notebook on SVM"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Support Vector Classifier 
+# The e1071 library contains the svm() function, that is used for support vector machines. 
+# The argument kernel="linear" indicates support vector classifier
+# A cost argument allows us to specify the cost of a violation to the margin. When the cost argument is small, then the margins will be wide and many support vectors will be on the margin or will violate the margin. 
+# The svm() function is used to fit the support vector classifier for a given value of the cost parameter. 
+
+# Data generating process
+set.seed(1)
+x=matrix(rnorm(20*2), ncol = 2)
+y=c(rep(-1, 10), rep(1, 10))
+x[y == 1, ]=x[y == 1, ]+1
+plot(x, col=(3 - y))
+
+# Encode the response as a factor variable. 
+dat=data.frame(x = x, y = as.factor(y))
+library(e1071)
+svmfit=svm(y~., data=dat, kernel="linear", cost=10, scale=FALSE)
+# plot the support vector classifier; the support vectors are plotted as crosses and the remaining observations are plotted as circles. 
+plot(svmfit, dat)
+# determine identities of the seven support vectors 
+svmfit$index
+# obtain some basic information about the SVC by summary() command
+summary(svmfit)
+# use a smaller value of the cost parameter
+svmfit=svm(y~., data=dat, kernel="linear", cost=0.1, scale = FALSE)
+plot(svmfit, dat)
+svmfit$index
+
+# The e1071 library includes a built-in function tune(), to perform cross-validation. By default, tune() performs ten-fold cross-validation on a set of models of interest. 
+# Using a range of values of the cost parameters for SVMs
+set.seed(1)
+tune.out=tune(svm, y~., data=dat, kernel="linear", ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100)))
+summary(tune.out)
+# The tune() function stores the best model obtained, which can be accessed as follows. 
+bestmod=tune.out$best.model
+summary(bestmod)
+
+# The predict() function is to predict the class label on a set of test observations, at any given value of the cost parameter. 
+# generate a test data set
+xtest=matrix(rnorm(20*2), ncol=2)
+ytest=sample(c(-1,1), 20, rep=TRUE)
+xtest[ytest==1, ]=xtest[ytest==1, ]+1
+testdat=data.frame(x=xtest, y=as.factor(ytest))
+# predict the class labels of these test observations
+ypred=predict(bestmod, testdat)
+table(predict=ypred, truth=testdat$y)
+```
+```{r}
+# Support Vector Machine
+# To fit an SVM with a polynomial kernel we use kernel="polynomial"; to fit an SVM with a radial kernel we use kernel="radial". 
+# data generating process with a non-linear class boundary
+set.seed(1)
+x=matrix(rnorm(200*2), ncol=2)
+x[1:100, ]=x[1:100, ]+2
+x[101:150, ]=x[101:150, ]-2
+y=c(rep(1, 150), rep(2, 50))
+dat=data.frame(x=x, y=as.factor(y))
+plot(x, col=y)
+
+# Fit the training data using svm() function with a radial kernel and gamma=1
+train=sample(200, 100)
+svmfit=svm(y~., data=dat[train, ], kernel="radial", gamma=1, cost=1)
+plot(svmfit, dat[train, ])
+summary(svmfit)
+
+# perform cross-validation using tune() to select the best choice of gamma and cost for an SVM with a radial kernel
+set.seed(1)
+tune.out=tune(svm, y~., data=dat[train, ], kernel="radial", ranges = list(cost=c(0.1, 1, 10, 100, 1000), gamma=c(0.5, 1, 2, 3, 4)))
+summary(tune.out)
+table(true=dat[-train, "y"], pred=predict(tune.out$best.model, newdata = dat[-train, ]))
+```
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

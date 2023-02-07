@@ -1,0 +1,229 @@
+---
+title: "R Notebook on EM algorithm"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = F,message = F)
+```
+
+# The Faithful Data
+The **faithful** data consist of the waiting time between eruptions and the duration of the eruption for the Old Faithful geyser in Yellowstone National Park, Wyoming, USA.
+
+
+```{r}
+data("faithful")
+head(faithful)
+```
+
+We will consider the waiting time in the following. Let us display the empirical distribution of this variable.
+
+```{r}
+
+y = faithful$waiting
+hist(y, xlab="waiting time (mn)")
+```
+We clearly see 2 modes: the waiting times seem to be distributed either around 50mn or around 80mn.
+
+
+# K-Means Clustering
+Imagine that we want to partition the data $(y_i,1≤i≤n)$ into $L$ clusters. Let $\mu_1,\cdots,\mu_L$ be the $L$ centers of these $L$ clusters. A way to decide to which cluster belongs an observation $y_i$ consists in minimizing the distance between $y_i$ and the centers $(\mu_\ell)$.
+
+Let $z_i$ be a label variable such that $z_i=\ell$ if observation $i$ belongs to cluster $\ell$. Then, $$z_i=\arg \min_{\ell\in\{1,\cdots,L\}}(y_i-\mu_\ell)^2$$.
+
+The centers $(\mu_\ell)$ can be estimated by minimizing the within-cluster sum of squares
+$$\begin{align*}U(\mu_1,\cdots,\mu_L)&=\sum_{i=1}^n \min_{\ell\in\{1,\cdots,L\}}(y_i-\mu_\ell)^2\\
+&=\sum_{i=1}^n(y_i-\mu_{z_i})^2\\
+&=\sum_{i=1}^n\sum_{l=1}^L(y_i-\mu_\ell)^2\mathbb{I}(z_i=\ell).
+\end{align*}$$
+
+For $\ell=1,2,…,L$, the solution $\hat{\mu}_\ell$ is the empirical mean computed in cluster $\ell$. Let $n_\ell=\sum_{i=1}^n\mathbb{I}(z_i=\ell)$ be the number of observation belonging to cluster $\ell$. Then
+$$\hat{\mu}_\ell=\frac{1}{n_\ell}\sum_{i=1}^ny_i\mathbb{I}(z_i=\ell)$$.
+
+Let us compute the centers of the two cluster for our faithful data （k-means clustering）:
+
+```{r}
+U <- function(mu,y) {
+  e1 <- (y-mu[1])^2
+  e2 <- (y-mu[2])^2
+  e.min <- pmin(e1,e2)
+  e <- sum(e.min)
+  return(e)
+}
+
+r.cluster <- nlm(U,c(50,80),y)
+mu.est <- r.cluster$estimate
+print(mu.est)
+```
+
+
+We can then classify the n observations into these 2 clusters
+```{r}
+e1 <- (y-mu.est[1])^2
+e2 <- (y-mu.est[2])^2
+group.est <- rep(1,length(y))
+group.est[which(e2<e1)] <- 2
+group.est <- as.factor(group.est)
+
+library(ggplot2)
+theme_set(theme_bw())
+
+ggplot() + geom_point(data=data.frame(y,group.est), aes(x=y,y=0,colour=group.est),size=3) + geom_point(data=data.frame(y=mu.est,group=factor(c(1,2))), aes(y,0,colour=group),size=10, shape="x")+ geom_vline(xintercept=mean(mu.est))
+```
+
+and compute the sizes, the empirical means and standard deviations for each cluster:
+```{r}
+print(c(length(y[group.est==1]),length(y[group.est==2])))
+print(c(mean(y[group.est==1]),mean(y[group.est==2])))
+print(c(sd(y[group.est==1]),sd(y[group.est==2])))
+```
+
+**Remark**: we could equivalently the function **kmeans**:
+```{r}
+r.km <- kmeans(y, centers=2)
+r.km$cluster
+r.km$size
+as.vector(r.km$centers)
+sqrt(r.km$withinss/(r.km$size-1))
+```
+
+
+# Mixture of probability distributions
+The labels $z_1,\cdots.z_n$ are a sequence of random variables that take their values in $\{1,2,\cdots,L\}$ and such that, for $\ell=1,2,\cdots,L$,
+$$\mathbb{P}(z_i=\ell)=\pi_\ell,$$
+where $\sum_{\ell=1}^L\pi_\ell=1$.
+
+The observations in group $\ell$, i.e. such $z_i=\ell$, are independent and follow a same probability distribution $f_\ell$,
+$$y_i|z_i=\ell \sim f_{\ell}.$$
+
+The maximum likelihood (ML) estimate cannot be computed in a closed form but several methods can be used for maximizing this likelihood function.
+
+# Newton-Type Algorithm
+
+For instance, a Newton-type algorithm can be used for minimizing the deviance $-2\log L(\boldsymbol{\theta},\boldsymbol{y})$.
+
+```{r}
+# a Newton-type algorithm can be used for minimizing the likelihood for Gaussian Mixture Model
+mixt.deviance <- function(theta,y) {
+  pi1    <- theta[1]
+  pi2    <- 1 - pi1
+  mu1    <- theta[2]
+  mu2    <- theta[3]
+  sigma1 <- theta[4]
+  sigma2 <- theta[5]
+  pdf <- pi1*dnorm(y,mu1,sigma1) + pi2*dnorm(y,mu2,sigma2)
+  deviance <- -2*sum(log(pdf))
+ return(deviance)
+  }
+
+y = faithful$waiting
+
+r.nlm <- nlm(mixt.deviance,c(.25,52,82,10,10),y)
+theta.est <- c(r.nlm$estimate[1], 1-r.nlm$estimate[1], r.nlm$estimate[2:5])
+print(matrix(theta.est,nrow=3,byrow = T))
+
+print(mixt.deviance(r.nlm$estimate,y))
+```
+
+We can then plot the empirical distribution of the data together with the probability density function of the mixture:
+```{r}
+dmixt <- function(x,theta) {
+  pi1 <- theta[1]
+  pi2 <- theta[2]
+  mu1 <- theta[3]
+  mu2 <- theta[4]
+  sigma1 <- theta[5]
+  sigma2 <- theta[6]
+  f1 <- dnorm(x,mu1,sigma1)
+  f2 <- dnorm(x,mu2,sigma2)
+  f <- pi1*f1 + pi2*f2
+}
+
+x <- (35:100)
+pdf.mixt <- dmixt(x,theta.est)
+ggplot(data=faithful) + geom_histogram(aes(x=waiting, y=..density..), bins=30) +
+  geom_line(data=data.frame(x,pdf.mixt), aes(x,pdf.mixt),colour="red",size=1.5)
+```
+
+Comparing the empirical and theoretical cumulative distribution functions (cdf) shows how well the mixture model fits the data
+
+```{r}
+pmixt <- function(x,theta) {
+  pi1 <- theta[1]
+  pi2 <- theta[2]
+  mu1 <- theta[3]
+  mu2 <- theta[4]
+  sigma1 <- theta[5]
+  sigma2 <- theta[6]
+  F1 <- pnorm(x,mu1,sigma1)
+  F2 <- pnorm(x,mu2,sigma2)
+  F  <- pi1*F1 + pi2*F2
+  return(F)
+}
+cdf.mixt <- pmixt(x,theta.est)
+
+ggplot(data=faithful) + stat_ecdf(aes(waiting), geom = "step", size=1) +
+  geom_line(data=data.frame(x,cdf.mixt), aes(x,cdf.mixt),colour="red",size=1) +
+  ylab("cdf")
+```
+
+# EM Algorithm
+EM algorithm:
+
+Step 1 (Expectation step): Given the current guess of Gaussian components, we compute ownership of each point.
+
+Step 2 (Maximization step): Given ownership probabilities, update Gaussian components to maximize likelihood function (calculate new means, variance and mixing weight).
+
+Step3: Repeat step 1 and 2 until convergence.
+
+The Expectation - Maximization (EM) algorithm implemented in the **mixtools** library could also be used for computing the ML estimate
+
+```{r}
+library(mixtools)
+r.mixEM = normalmixEM(y)
+list(p=r.mixEM$lambda,mu=r.mixEM$mu,sigma=r.mixEM$sigma)
+-2*r.mixEM$loglik
+plot(r.mixEM,which=2)
+head(r.mixEM$posterior)
+```
+
+
+# Mixture model versus clustering
+Let us sample some data from a Gaussian mixture model. 
+```{r}
+
+set.seed(12345)
+y1 <- rnorm(120, 0, 1)
+y2 <- rnorm(80, 3, 1)
+y=c(y1, y2)
+z=c(rep(1,120),rep(2,80))
+d <- data.frame(y,z)
+```
+
+We can use the k-means method to create two clusters and compute the proportion, center and standard deviation for each cluster.
+```{r}
+r.km <- kmeans(y, centers=c(-1,1))
+list(p=r.km$size/sum(r.km$size), mu=as.vector(r.km$centers), sigma=sqrt(r.km$withinss/r.km$size))
+```
+
+We can instead consider a Gaussian mixture model, use the EM algorithm with the same data and display the estimated parameters
+```{r}
+r.mixEM = normalmixEM(y)
+list(p=r.mixEM$lambda,mu=r.mixEM$mu,sigma=r.mixEM$sigma)
+```
+
+Since the ``true’’ labels are known, we can compute the classification error rate for each method (in % here):
+```{r}
+d$km <- r.km$cluster
+d$EM <- (r.mixEM$posterior[,1]<0.5)+1
+print(c(mean(d$z != d$km)*100, mean(d$z != d$EM)*100))
+
+```
+
+The Gaussian mixture model is a model. It is an assumption or approximation to how the data (and future data, often) were generated.
+
+K-means is an algorithm. Given a data set, it divides it into $k$ clusters in a way that attempts to minimize the average Euclidean distance from a point to the center of its clusters. We can use k-means clustering without any assumption about the data-generating process.
+
+
