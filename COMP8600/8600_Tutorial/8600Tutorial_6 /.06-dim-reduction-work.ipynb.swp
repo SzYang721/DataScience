@@ -1,0 +1,1015 @@
+{
+    "metadata": {
+        "kernelspec": {
+            "name": "python3",
+            "display_name": "Python 3 (ipykernel)",
+            "language": "python"
+        }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 1,
+    "cells": [
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "# Dimensionality reduction"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "###### COMP4670/8600 - Statistical Machine Learning - Tutorial"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "In this lab, we will use dimensionality reduction techniques to explore a dataset of pictures.\n",
+                "\n",
+                "### Assumed knowledge\n",
+                "- Neural net implementation (lab)\n",
+                "- Autoencoders and PCA (lectures)\n",
+                "\n",
+                "### After this lab, you should be comfortable with:\n",
+                "- Implementing PCA\n",
+                "- Implementing an autoencoder\n",
+                "- Visualising features derived from dimensionality reduction\n",
+                "\n",
+                "### Textbook Questions\n",
+                "* **12.1:** You'll need to use both the orthogonality of all u_i as well as the property that all u_i are eigenvectors of S to simplify the deriviative of the Lagrangian. (Difficulty: \\*\\*, extension of textbook proof with a minor trick necessary.)\n",
+                "* **12.28:** $f(x)$ will need to be *strictly* monotonic (i.e. $0 \u003c f'(x)$). From this, substitute into 1.27 and change variables to solve for $|f'(x)|$. (Difficulty: \\*\\*, simple property, but requires some rigour.) \n",
+                "\n",
+                "There are less textbook questions than usual this week. You should use this time to work through the proofs in this lab, as they will serve a similar purpose for your learning."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "import matplotlib.pyplot as plt\n",
+                "import numpy as np\n",
+                "import scipy.optimize as opt\n",
+                "%matplotlib inline"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Load the data\n",
+                "\n",
+                "For this lab, we will use a dataset of images of Pokemon sprites.\n",
+                "\n",
+                "Load the dataset from the file ``06-dataset.csv`` using ``np.loadtxt``. The datafile represents a 2d array where each row is a 64 by 64 pixel greyscale picture. The entries are floats between 0 and 1, where 0 is white and 1 is black.\n",
+                "\n",
+                "Note that while the images are 64 by 64 entries, the dataset you load has rows of size 4096 (which is $64\\times 64$) to allow the data to be saved as a 2D array."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "images = np.loadtxt('/course/data/tutorials/06-dataset.csv')"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Toy dataset for debugging\n",
+                "\n",
+                "For debugging, it is useful to also have a simple dataset that we know is one-dimensional with some noise. You can use this to test your functions produce sensible output. Below is a function that generates data from two Gaussians in $\\mathbb{R}^n$ with unit variance, centered at $\\mathbf{1}$ and $-\\mathbf{1}$ respectively. (Note: $\\mathbf{1}$ is the vector $(1, 1, 1, ..., 1)$ in $\\mathbb{R}^n$.)"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "def gen_data(n_samples=100, n_feat=5):\n",
+                "    \"\"\"Generate data from two Gaussians\n",
+                "    n_samples = number of samples from each Gaussian\n",
+                "    n_feat = dimension of the features\n",
+                "    \"\"\"\n",
+                "    X1 = np.ones((n_feat, n_samples)) + np.random.randn(n_feat, n_samples)\n",
+                "    X2 = -np.ones((n_feat, n_samples)) + np.random.randn(n_feat, n_samples)\n",
+                "    X = np.hstack([X1,X2])\n",
+                "    return X\n",
+                "\n",
+                "toy_data = gen_data()"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Implementing PCA\n",
+                "\n",
+                "### Recap on PCA\n",
+                "\n",
+                "Remember from lectures that the goal of PCA is to linearly project data points onto a lower dimensional subspace such that the variance of the projected data is maximised. \n",
+                "\n",
+                "Let the data be the set of data points $\\{\\mathbf{x}_n\\}_{n=1}^N$, $\\mathbf{x}_n\\in\\mathbb{R}^d$, with mean $\\bar{\\mathbf{x}}=\\frac{1}{N}\\sum_{n=1}^N\\mathbf{x}_n$ and covariance matrix $\\mathbf{S}=\\frac{1}{N}\\sum_{n=1}^N(\\mathbf{x}_n-\\bar{\\mathbf{x}})(\\mathbf{x}_n-\\bar{\\mathbf{x}})^T.$\n",
+                "\n",
+                "From lectures, we derived that if we are linearly projecting onto a subspace $m\u003cd$, then the $m$ directions to linearly project on are given by the $m$ eigenvectors of $\\mathbf{S}$ whose eigenvalues are the $m$ largest, and the variance along each direction is equal to that eigenvalue.\n",
+                "\n",
+                "### Using the SVD to implement PCA\n",
+                "\n",
+                "Let us assume that $\\bar{\\mathbf{x}}=\\mathbf{0}$. Then $\\mathbf{S}=\\frac{1}{N}\\sum_{n=1}^N\\mathbf{x}_n\\mathbf{x}_n^T$. \n",
+                "However, it turns out that\n",
+                "$$\\sum_{n=1}^N\\mathbf{x}_n\\mathbf{x}_n^T=X^TX$$\n",
+                "where $X\\in\\mathbb{R}^{N\\times d}$ is the data matrix.\n",
+                "Thus to find the eigenvalues and vectors of the covariance matrix, we need to find the eigenvalues and vectors of $\\frac{1}{N}X^TX$.\n",
+                "\n",
+                "It turns out that if the SVD of $X$ is $X=U\\Sigma V^T$, then the eigenvectors of $\\mathbf{S}$ that correspond to its $k$ largest eigenvalues are the column vectors of $V$ that correspond to the $k$ largest singular values of $X$.\n",
+                "\n",
+                "### Question\n",
+                "Show the left out steps (the two parts where it says \"it turns out\")."
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### \u003cspan style=\"color:blue\"\u003eAnswer\u003c/span\u003e\n",
+                "\u003ci\u003e--- replace this with your solution, add and remove code and markdown cells as appropriate ---\u003c/i\u003e"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### Implement PCA\n",
+                "Implement principal component analysis. Your function should take the data matrix and the number of components you wish to calculate and return two matrices:\n",
+                "1. The projection of the data onto the principal components\n",
+                "2. The actual components (eigenvectors) themselves.\n",
+                "\n",
+                "Hint: Do not forget to center the data by removing the mean so that you can use the above method. You may find ``np.linalg.svd`` useful."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "def pca(X, n_pc=2):\n",
+                "    \"\"\"Returns the projection onto the principal components (default=2)\"\"\"\n",
+                "    \n",
+                "    # TODO\n",
+                "    raise NotImplementedError\n",
+                "\n",
+                "def svd2pca(U,S,V, n_pc=2):\n",
+                "    \"\"\"Returns the projection onto the principal components (default=2). Used for\n",
+                "    when you want to change n_pc and have already computed the SVD once\"\"\"\n",
+                "    \n",
+                "    # TODO\n",
+                "    raise NotImplementedError"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### Verifying the calculation with the toy data\n",
+                "\n",
+                "Below we calculate the projection of the toy data onto the first two principal components.\n",
+                "\n",
+                "1. Does PCA pick up the two Gaussians?\n",
+                "2. What are the eigenvalues associated to these principal components? What do they tell you about how much variance these components explain?"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "print(toy_data.shape)\n",
+                "Z, P, U, S, V = pca(toy_data.T)\n",
+                "fig = plt.figure(figsize=(8,8))\n",
+                "ax = fig.add_subplot(111)\n",
+                "ax.plot(Z[:100,0], Z[:100,1], 'ro')\n",
+                "ax.plot(Z[100:,0], Z[100:,1], 'bx')\n",
+                "ax.set_xlabel('First principal component')\n",
+                "ax.set_ylabel('Second principal component')\n",
+                "print(S)"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Eigen-pokemon\n",
+                "\n",
+                "If we perform PCA on a dataset, we expect the principal components to lie in the neighbourhood of our datapoints. In particular, if we do this on a dataset of images, we can interpret the principal components as images.\n",
+                "\n",
+                "The following function plots a gallery of images."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# Visualising images\n",
+                "def plot_gallery(images, titles, h, w, n_row=2, n_col=6):\n",
+                "    \"\"\"Helper function to plot a gallery of portraits.\n",
+                "    Arguments: images: a matrix where each row is an image.\n",
+                "    titles: an array of labels for each image.\n",
+                "    h: the height in pixels of each image.\n",
+                "    w: the width in pixels of each image.\n",
+                "    n_row: the number of rows of images to print.\n",
+                "    n_col: the number of columns of images to print.\"\"\"\n",
+                "    assert len(images) \u003e= n_row * n_col\n",
+                "    assert len(titles) \u003e= n_row * n_col\n",
+                "    plt.figure(figsize=(1.8 * n_col, 2.4 * n_row))\n",
+                "    plt.subplots_adjust(bottom=0, left=.01, right=.99, top=.90, hspace=.35)\n",
+                "    for i in range(n_row * n_col):\n",
+                "        plt.subplot(n_row, n_col, i + 1)\n",
+                "        plt.imshow(images[i].reshape((h, w)), cmap=plt.cm.gray)\n",
+                "        plt.title(titles[i], size=12)\n",
+                "        plt.xticks(())\n",
+                "        plt.yticks(())\n",
+                "    plt.show()"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "We can use ``plot_gallery`` to plot the first 30 pokemon images."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "plot_gallery(images, np.arange(30), 64, 64, 5, 6)"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "Perform PCA on the Pokemon dataset to find the first 200 principal components. Visualise the first 100 using ``plot_gallery``.\n",
+                "\n",
+                "### Question\n",
+                "\n",
+                "What do you notice about the first few principal components? What are they detecting?\n",
+                "Plot the associated eigenvalues. How can you interpret these?"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# replace this with your solution, add and remove code and markdown cells as appropriate"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### \u003cspan style=\"color:blue\"\u003eAnswer\u003c/span\u003e\n",
+                "\u003ci\u003e--- replace this with your solution, add and remove code and markdown cells as appropriate ---\u003c/i\u003e"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# replace this with your solution, add and remove code and markdown cells as appropriate"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Reconstructing images using PCA\n",
+                "\n",
+                "Plot the reconstructions of the first 30 images using 200 principal components, and using the first 15 principal components. Don't forget to add the mean back in. How good are these reconstructions?"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# replace this with your solution, add and remove code and markdown cells as appropriate"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# replace this with your solution, add and remove code and markdown cells as appropriate"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Dimensionality Reduction with Autoencoders\n",
+                "\n",
+                "Another method of dimensionality reduction is by using an autoencoder. We will be implementing a **stacked undercomplete autoencoder**. We will be working off the neural network implementation from last week, but will make some changes.\n",
+                "\n",
+                "We are also going to try to get a much better result than PCA, in particular try to encode the Pokemon into **a subspace of dimension 4**. This means that the bottleneck hidden layer, or *code*, is of length 4. In order to get such good results, we are going to have to use some of the tricks from the lectures, in particular **Xavier Initialisation**, **ReLU activations** and **Mini-batch training**.\n",
+                "\n",
+                "We are going to make two explicit network classes, an encoder and a decoder. Each will have 3 fully connected layers, we will be going from 4096 to 512 to 64 and then 4, and vice-versa for the decoder."
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "The first part we will implement is the FullyConnectedLayer(). The only part we are going to change is the initialisation method, from normally distributed weights with standard deviation 1 to using **Xavier initialisation**. As explained in lectures, this is to help saturation (see follow up question below). In lectures, the standard deviation deviation for Xavier initialisation of normally distributed weights is \n",
+                "$$\\sqrt{\\frac{1}{n_{in}}}$$\n",
+                "but we are going to change this to the more commonly used variant (considers making sure the backpropagated signal is also not saturated, see [here](http://proceedings.mlr.press/v9/glorot10a/glorot10a.pdf) for details)\n",
+                "\n",
+                "$$\\sqrt{\\frac{2}{n_{in}+n_{out}}}.$$\n",
+                "\n",
+                "Here we have denoted $n_{in}$ as the dimension of the input to the layer, and $n_{out}$ the dimension of the output of the layer.\n",
+                "\n",
+                "We will also consider the bias as another input, and thus use the same initialisation (with $n_{in}$ increased by 1).\n",
+                "\n",
+                "### Question\n",
+                "What is saturation, and why is it especially important in this network compared to the one we implemented last week?"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### \u003cspan style=\"color:blue\"\u003eAnswer\u003c/span\u003e\n",
+                "\u003ci\u003e--- replace this with your solution, add and remove code and markdown cells as appropriate ---\u003c/i\u003e"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "class FullyConnectedLayer():\n",
+                "    \"\"\"\n",
+                "    This is a class skeleton provided.\n",
+                "    It should perform y = Xw + b and its correspongding gradient.\n",
+                "    If you never defined any classes in python before, you probably want to read other tutorials.\n",
+                "    \"\"\"\n",
+                "    def __init__(self, in_features, out_features):\n",
+                "        \"\"\"\n",
+                "        This is the init function where you have all the attributes needed defined.\n",
+                "        You don't have to modify any thing in this function but you should read it carefully.\n",
+                "        What each represents will be explained in the next few functions.\n",
+                "        \"\"\"\n",
+                "        self.in_features = in_features\n",
+                "        self.out_features = out_features\n",
+                "        self.weight = np.zeros((in_features, out_features))\n",
+                "        self.bias = np.zeros((out_features, 1))\n",
+                "        self.g_weight = np.zeros((in_features, out_features))\n",
+                "        self.g_bias = np.zeros((out_features, 1))\n",
+                "        self.input = None\n",
+                "\n",
+                "    def init_weights(self):\n",
+                "        \"\"\"\n",
+                "        Currently, the weight and bias of this layer is initilized to zero, which is terrible.\n",
+                "        You want to re-initilize the weight and bias with Xavier initialisation as explained above.\n",
+                "        After you finish, comment out raise NotImplementedError.\n",
+                "        No return value is needed.\n",
+                "        \"\"\"\n",
+                "        ###############\n",
+                "        #YOU CODE HERE#\n",
+                "        ###############\n",
+                "\n",
+                "        raise NotImplementedError\n",
+                "\n",
+                "    def forward_pass(self, X):\n",
+                "        \"\"\"\n",
+                "        Take the output of last layer as X and return the result.\n",
+                "        Don't forget to save the input X to self.input. You will need the input for gradient calculation.\n",
+                "        After you finish, comment out raise NotImplementedError.\n",
+                "        If you are new to python/numpy, you probably want to figure out what is broadcasting \n",
+                "        (see http://cs231n.github.io/python-numpy-tutorial/#numpy-broadcasting).\n",
+                "        \"\"\"\n",
+                "\n",
+                "        \n",
+                "        self.input = X\n",
+                "        \n",
+                "        out = np.dot(X, self.weight) + self.bias.T\n",
+                "      \n",
+                "        return out\n",
+                "        \n",
+                "\n",
+                "    def backward_pass(self, g_next_layer):\n",
+                "        \"\"\"\n",
+                "        g_next_layer is the gradient passed from next layer (the layer after current layer in forward pass).\n",
+                "        You need to calculate 3 things.\n",
+                "        First, the gradient with respect to bias, self.g_bias.\n",
+                "        Second, the gradient with respect to weights, self.g_weight.\n",
+                "        Third, the gradient with respect to last layer (the layer formed by the current weight and bias), g_last_layer.\n",
+                "        Save the gradient with respect to bias and the gradient with respect to weight.\n",
+                "        Return the gradient with respect to last layer.\n",
+                "        \"\"\"\n",
+                "\n",
+                "        self.g_weight = np.dot(self.input.T, g_next_layer)\n",
+                "        self.g_bias = np.sum(g_next_layer, axis=0, keepdims=True)\n",
+                "\n",
+                "        g_last_layer = np.dot(g_next_layer, self.weight.T)\n",
+                "\n",
+                "        return g_last_layer\n",
+                "\n",
+                "    def update(self, learning_rate):\n",
+                "        \"\"\"\n",
+                "        Update the weight and bias use the gradient that you just calculated.\n",
+                "        No return is needed.\n",
+                "        \"\"\"\n",
+                "        \n",
+                "        self.weight -= learning_rate*self.g_weight\n",
+                "        self.bias -= learning_rate*self.g_bias.T\n",
+                ""
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "Next we are going to implement our activation functions. We already have our Sigmoid layer from last week. We need to use this at the end of our network, as our outputs (the resulting image) needs to be within $[0,1]$. However, for the inner activation functions, we are going to use the **ReLU** function which works better in practice.\n",
+                "\n",
+                "### Question\n",
+                "What is the benefit of ReLU as an activation function? What is its gradient?"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### \u003cspan style=\"color:blue\"\u003eAnswer\u003c/span\u003e\n",
+                "\u003ci\u003e--- replace this with your solution, add and remove code and markdown cells as appropriate ---\u003c/i\u003e"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "def sigmoid(X):\n",
+                "    \"\"\"\n",
+                "    Make sure that you function works with X being matrix.\n",
+                "    Use functions in numpy instead of functions in math.\n",
+                "    \"\"\"\n",
+                "    return 1/(1 + np.exp(-X))\n",
+                "class Sigmoid():\n",
+                "    def __init__(self):\n",
+                "        \"\"\"\n",
+                "        This is the init function where you have all the attributes needed defined.\n",
+                "        You don't have to modify any thing in this function but you should read it carefully.\n",
+                "        \"\"\"\n",
+                "        self.input = None\n",
+                "\n",
+                "    def forward_pass(self, X):\n",
+                "        \"\"\"\n",
+                "        Apply sigmoid function to input and save the input for later.\n",
+                "        \"\"\"\n",
+                "        \n",
+                "        self.input = X\n",
+                "\n",
+                "        return sigmoid(X)\n",
+                "\n",
+                "    def backward_pass(self, g_next_layer):\n",
+                "        \"\"\"\n",
+                "        Calculate the gradient with respect to the input.\n",
+                "        g_next_layer is the gradient passed from next layer (the layer after current layer in forward pass).\n",
+                "        Return the gradient with respect to the output of the last layer.\n",
+                "        \"\"\"\n",
+                "        g_last_layer = sigmoid(self.input) * ( 1 - sigmoid(self.input)) * g_next_layer\n",
+                "\n",
+                "        return g_last_layer\n",
+                "\n",
+                "    def update(self, learning_rate):\n",
+                "        \"\"\"\n",
+                "        There is no parameter to update for this layer, but we still define this function to maintain a uniform interface.\n",
+                "        \"\"\"\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "class ReLU():\n",
+                "    def __init__(self):\n",
+                "        \"\"\"\n",
+                "        This is the init function where you have all the attributes needed defined.\n",
+                "        You don't have to modify any thing in this function but you should read it carefully.\n",
+                "        \"\"\"\n",
+                "        self.input = None\n",
+                "\n",
+                "    def forward_pass(self, X):\n",
+                "        \"\"\"\n",
+                "        Apply sigmoid function to input and save the input for later.\n",
+                "        \"\"\"\n",
+                "        \n",
+                "        self.input = X\n",
+                "\n",
+                "        ###############\n",
+                "        #YOU CODE HERE#\n",
+                "        ###############\n",
+                "        \n",
+                "        raise NotImplementedError\n",
+                "\n",
+                "        return None\n",
+                "\n",
+                "    def backward_pass(self, g_next_layer):\n",
+                "        \"\"\"\n",
+                "        Calculate the gradient with respect to the input.\n",
+                "        g_next_layer is the gradient passed from next layer (the layer after current layer in forward pass).\n",
+                "        Return the gradient with respect to the output of the last layer.\n",
+                "        \"\"\"\n",
+                "        ###############\n",
+                "        #YOU CODE HERE#\n",
+                "        ###############\n",
+                "        \n",
+                "        raise NotImplementedError\n",
+                "        \n",
+                "        g_last_layer = None\n",
+                "\n",
+                "        return g_last_layer\n",
+                "\n",
+                "    def update(self, learning_rate):\n",
+                "        \"\"\"\n",
+                "        There is no parameter to update for this layer, but we still define this function to maintain a uniform interface.\n",
+                "        \"\"\"\n",
+                "        pass"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "We are also going to change our loss function, as we care about the actual values of the resulting sigmoid output, we are not thresholding anything to classify into classes. Thus we are going to use the Mean Squared Error loss (MSE)."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "class MSELoss():\n",
+                "    def __init__(self):\n",
+                "        \"\"\"\n",
+                "        This is the init function where you have all the attributes needed defined.\n",
+                "        You don't have to modify any thing in this function but you should read it carefully.\n",
+                "        \"\"\"\n",
+                "        self.input_y = None\n",
+                "        self.input_t = None\n",
+                "        self.input_N = None\n",
+                "\n",
+                "\n",
+                "    def forward_pass(self, y, t):\n",
+                "        \"\"\"\n",
+                "        y: batch_size * 1  0 \u003c= y \u003c= 1, the predictions\n",
+                "        t: batch_size * 1 , the targets\n",
+                "        (make sure y and t have the same shape. (N,) and (N,1) are different!)\n",
+                "        \n",
+                "        Save the input y, t and batch size N and calculate the loss.\n",
+                "        Return the mean of the loss (a scalar).\n",
+                "        \"\"\"\n",
+                "        \n",
+                "        ###############\n",
+                "        #YOU CODE HERE#\n",
+                "        ###############\n",
+                "        \n",
+                "        raise NotImplementedError\n",
+                "\n",
+                "        return None\n",
+                "    \n",
+                "    def backward_pass(self, g_next_layer = 1):\n",
+                "        \"\"\"\n",
+                "        Nomrally, loss layer is the last layer in a neural network. Thus, we set the g_next_layer to 1.\n",
+                "        Calculate the loss of the input y.\n",
+                "        \"\"\"\n",
+                "        raise NotImplementedError\n",
+                "        \n",
+                "        g_last_layer = None\n",
+                "\n",
+                "        return g_last_layer\n",
+                "\n",
+                "    def update(self, learning_rate):\n",
+                "        \"\"\"\n",
+                "        There is no parameter to update for this layer, but we still define this function to maintain a uniform interface.\n",
+                "        \"\"\"\n",
+                "        pass"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "Finally we are going to implement the two neural networks, encoder and decoder. To do this, we will extend the Network class, and then just add what we need to ```self.sequential```. Note that we have also added a return value in the backward pass, as we want to pass the gradient from the decoder to the encoder.\n",
+                "\n",
+                "- The **encoder** should have 3 fully connected layers, going from 4096 to 512 to 64 and then to 4. The activation functions should all be ReLU.\n",
+                "\n",
+                "- The **decoder** should have 3 fully connected layers, going from 4 to 64 to 512 and then to 4096. The activation functions should all be ReLU, except for the last layer's activation which should be Sigmoid to get the correct range.\n",
+                "\n",
+                "If you have time, experiment with changing these. Does changing to Sigmoid reduce performance? Can you get better performance by changing the number of layers and hidden unit sizes?"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "class Network():\n",
+                "    def __init__(self):\n",
+                "        self.sequential = []\n",
+                "        \n",
+                "    def forward_pass(self, X):\n",
+                "\n",
+                "        for l in self.sequential:\n",
+                "\n",
+                "            X = l.forward_pass(X)\n",
+                "\n",
+                "        return X\n",
+                "\n",
+                "    def backward_pass(self, grad):\n",
+                "        \n",
+                "        for l in reversed(self.sequential):\n",
+                "\n",
+                "            grad = l.backward_pass(grad)\n",
+                "        \n",
+                "        return grad\n",
+                "            \n",
+                "\n",
+                "    def update(self, learning_rate):\n",
+                "\n",
+                "        for l in self.sequential:\n",
+                "\n",
+                "            l.update(learning_rate)\n",
+                "\n",
+                "class Encoder(Network):\n",
+                "    def __init__(self):\n",
+                "        Network.__init__(self)\n",
+                "        \"\"\"\n",
+                "        Initialize all layers that you need and append them to the list in the correct order.\n",
+                "        Don't forget to initilize the weights for fully connected layers.\n",
+                "        \"\"\"\n",
+                "        \n",
+                "        ###############\n",
+                "        #YOU CODE HERE#\n",
+                "        ###############\n",
+                "        \n",
+                "        raise NotImplementedError\n",
+                "\n",
+                "\n",
+                "class Decoder(Network):\n",
+                "    def __init__(self):\n",
+                "        Network.__init__(self)\n",
+                "        \"\"\"\n",
+                "        Initialize all layers that you need and append them to the list in the correct order.\n",
+                "        Don't forget to initilize the weights for fully connected layers.\n",
+                "        \"\"\"\n",
+                "        \n",
+                "        ###############\n",
+                "        #YOU CODE HERE#\n",
+                "        ###############\n",
+                "        \n",
+                "        raise NotImplementedError"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "We now initialise the classes."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "try:\n",
+                "    np.random.seed(1)\n",
+                "    encoder = Encoder()\n",
+                "    decoder = Decoder()\n",
+                "    mse = MSELoss()\n",
+                "    implemented = True\n",
+                "except NotImplementedError:\n",
+                "    implemented = False\n",
+                "    print('you need to complete the implementation')"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### Training the neural network\n",
+                "As we are doing dimensionality reduction, there is no need for a train-test split. We have set some hyper-parameters for you, e.g. epochs, batch_size and learning rate. In particular the batch size is much smaller than the training set size.\n",
+                "### Question\n",
+                "What is the benefit of mini-batch training (training with small batch size, not the whole training set)?"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### \u003cspan style=\"color:blue\"\u003eAnswer\u003c/span\u003e\n",
+                "\u003ci\u003e--- replace this with your solution, add and remove code and markdown cells as appropriate ---\u003c/i\u003e"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "if not implemented:\n",
+                "    \n",
+                "    print('you need to complete the implementation')\n",
+                "\n",
+                "else:\n",
+                "\n",
+                "    training_epoch = 50\n",
+                "\n",
+                "    # We have set a mini-batch set size of 30, having found that it works well in practice. Try setting it equal\n",
+                "    # to the size of the traning set and see how well it performs. You may have to change learning rate in this case.\n",
+                "    batch_size = 30\n",
+                "    # batch_size = len(images)\n",
+                "\n",
+                "    for i in range(training_epoch):\n",
+                "        # We want to randomise the batches that we get for each epoch\n",
+                "        # Also helps for when the batch size does not divide nicely into the size of the dataset\n",
+                "        random_idxes = np.random.permutation(len(images))\n",
+                "        batches = [images[random_idxes[i*batch_size:(i+1)*batch_size]] for i in range(len(images)//batch_size)]\n",
+                "\n",
+                "        loss_vals = []\n",
+                "        for (j, batch) in enumerate(batches):\n",
+                "            \"\"\"\n",
+                "            This is the main training loop.\n",
+                "            You need to first run a forward pass on the encoder, get a code, then run the decoder on the code to get X_hat.\n",
+                "            Put these into the loss function, calculate the loss and do a back pass.\n",
+                "            Then update the network.\n",
+                "            Append the loss into the list loss_vals so we can see the average loss of each epoch.\n",
+                "            If you have used our hyperparamters, the learning rate we set should work for both the encoder and decoder.\n",
+                "            If you have changed the structure, experiment to see if you can find a good learning rante\n",
+                "            \"\"\"\n",
+                "            learning_rate = 5e-3\n",
+                "            X = batch\n",
+                "\n",
+                "\n",
+                "            ###############\n",
+                "            #YOU CODE HERE#\n",
+                "            ###############\n",
+                "\n",
+                "            X_hat = X * 0 # you code here\n",
+                "\n",
+                "            train_loss = 0 # you code here\n",
+                "            loss_vals.append(train_loss)\n",
+                "\n",
+                "\n",
+                "        print(\"Epoch %d: Train_loss %f\" %(i+1, np.mean(loss_vals)))\n",
+                "        show_every = 10\n",
+                "        if i % show_every == show_every - 1:\n",
+                "            plot_gallery(X_hat, np.arange(batch_size), 64, 64, min(2, int(np.ceil(batch_size/6))), 5)\n",
+                "            plot_gallery(X, np.arange(batch_size), 64, 64, min(2, int(np.ceil(batch_size/6))), 5)"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Visualising the autoencoder results\n",
+                "Visualise the autoencoder reconstructions for 30 images. Where they what you expect? Compare them to the reconstruction of 15 components. If you have time/are interested, try training for longer and/or the autoencoder with a higher bottleneck dimension."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "num_images = 30\n",
+                "random_images = images[np.random.permutation(len(images))[:num_images]]\n",
+                "plot_gallery(random_images, ['True Pokemon {:d}'.format(i) for i in range(num_images)], h, w, num_images//10, 10)\n",
+                "\n",
+                "code = encoder.forward_pass(random_images[:num_images])\n",
+                "recon = decoder.forward_pass(code)\n",
+                "\n",
+                "plot_gallery(recon, ['Reconstructed {:d}'.format(i) for i in range(num_images)], h, w, num_images//10, 10)"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Visualising autoencoder features\n",
+                "\n",
+                "You can find the features the autoencoder is picking up by decoding a hidden unit vector of the form $(0,\\dots,0,1,0,\\dots,0)$. How do these features compare to those detected by PCA? Also try visualising scaled versions of the features."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "for factor in [1, 5, 20]:\n",
+                "    code = factor*np.eye(4)\n",
+                "    recon = decoder.forward_pass(code)\n",
+                "\n",
+                "    plot_gallery(recon, ['{:0.2f}xFeature {:d}'.format(factor, i) for i in range(4)], h, w, 1, 4)"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## Autoencoder with linear transition functions\n",
+                "\n",
+                "Training an autoencoder with linear transition functions should result in projecting the dataset to the same subspace as in PCA. Check this for 4 principal component.\n",
+                "\n",
+                "Do do this, make a new encoder and decoder with bottleneck of dimension 4, and use no activations functions (so you only need to use 1 FullyConnectedLayer per network). Train the network again, and again look at what the basis vectors for the bottleneck dimension return (i.e. repeat the \"Visualising autoencoder features\" question with this new model)."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "class Encoder(Network):\n",
+                "    def __init__(self):\n",
+                "        Network.__init__(self)\n",
+                "        \n",
+                "        ###############\n",
+                "        #YOU CODE HERE#\n",
+                "        ###############\n",
+                "\n",
+                "\n",
+                "class Decoder(Network):\n",
+                "    def __init__(self):\n",
+                "        Network.__init__(self)\n",
+                "        \n",
+                "        ###############\n",
+                "        #YOU CODE HERE#\n",
+                "        ###############\n",
+                "\n",
+                "np.random.seed(1)\n",
+                "encoder = Encoder()\n",
+                "decoder = Decoder()\n",
+                "mse = MSELoss()"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "training_epoch = 30\n",
+                "\n",
+                "# We have set a mini-batch set size of 30, having found that it works well in practice. Try setting it equal\n",
+                "# to the size of the traning set and see how well it performs. You may have to change learning rate in this case.\n",
+                "batch_size = 30\n",
+                "# batch_size = len(images)\n",
+                "\n",
+                "# We need to normalise to compare to PCA\n",
+                "M = np.mean(images, axis=0)\n",
+                "\n",
+                "for i in range(training_epoch):\n",
+                "    # We want to randomise the batches that we get for each epoch\n",
+                "    # Also helps for when the batch size does not divide nicely into the size of the dataset\n",
+                "    random_idxes = np.random.permutation(len(images))\n",
+                "    batches = [images[random_idxes[i*batch_size:(i+1)*batch_size]] for i in range(len(images)//batch_size)]\n",
+                "    \n",
+                "    loss_vals = []\n",
+                "    for (j, batch) in enumerate(batches):\n",
+                "        \"\"\"\n",
+                "        This is the main training loop.\n",
+                "        You need to first run a forward pass on the encoder, get a code, then run the decoder on the code to get X_hat.\n",
+                "        Put these into the loss function, calculate the loss and do a back pass.\n",
+                "        Then update the network.\n",
+                "        Append the loss into the list loss_vals so we can see the average loss of each epoch.\n",
+                "        If you have used our hyperparamters, the learning rate we set should work for both the encoder and decoder.\n",
+                "        If you have changed the structure, experiment to see if you can find a good learning rante\n",
+                "        \"\"\"\n",
+                "        learning_rate = 5e-3\n",
+                "        X = batch\n",
+                "        \n",
+                "        X -= M\n",
+                "        \n",
+                "        code = encoder.forward_pass(X)\n",
+                "        X_hat = decoder.forward_pass(code)\n",
+                "        \n",
+                "        train_loss = mse.forward_pass(X_hat, X)\n",
+                "        loss_vals.append(train_loss)\n",
+                "\n",
+                "        grad = mse.backward_pass()\n",
+                "        grad2 = decoder.backward_pass(grad)\n",
+                "        encoder.backward_pass(grad2)\n",
+                "\n",
+                "        encoder.update(learning_rate)\n",
+                "        decoder.update(learning_rate)\n",
+                "        \n",
+                "\n",
+                "    print(\"Epoch %d: Train_loss %f\" %(i+1, np.mean(loss_vals)))\n",
+                "    show_every = 10\n",
+                "    if i % show_every == show_every - 1:\n",
+                "        plot_gallery(X_hat+M, ['Reconstructed {:d}'.format(i) for i in range(batch_size)], 64, 64, min(2, int(np.ceil(batch_size/6))), 5)\n",
+                "        plot_gallery(X+M, ['True Pokemon {:d}'.format(i) for i in range(100)], 64, 64, min(2, int(np.ceil(batch_size/6))), 5)"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "num_images = 30\n",
+                "random_images = images[np.random.permutation(len(images))[:num_images]]\n",
+                "plot_gallery(random_images, ['True Pokemon {:d}'.format(i) for i in range(num_images)], h, w, num_images//10, 10)\n",
+                "\n",
+                "code = encoder.forward_pass(random_images[:num_images])\n",
+                "recon = decoder.forward_pass(code)\n",
+                "\n",
+                "plot_gallery(recon, ['Reconstructed {:d}'.format(i) for i in range(num_images)], h, w, num_images//10, 10)"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "code = np.eye(4)\n",
+                "recon = decoder.forward_pass(code)\n",
+                "\n",
+                "plot_gallery(recon, ['Feature {:d}'.format(i) for i in range(4)], h, w, 1, 4)"
+            ]
+        },
+        {
+            "attachments": {},
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### \u003cspan style=\"color:blue\"\u003eAnswer\u003c/span\u003e\n",
+                "\u003ci\u003e--- replace this with your solution, add and remove code and markdown cells as appropriate ---\u003c/i\u003e"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": 0,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                ""
+            ]
+        }
+    ]
+}
